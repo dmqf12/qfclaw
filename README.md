@@ -1,4 +1,3 @@
-```markdown
 # qfclaw
 
 qfclaw 是一个使用 Rust 构建的精简 agent。
