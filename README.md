@@ -2,7 +2,7 @@
 
 qfclaw 是一个使用 Rust 构建的精简 agent。
 
-## 构建方式
+## 构建方式：
 
 ### 使用 Cargo 构建
 
