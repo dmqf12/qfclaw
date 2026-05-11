@@ -219,7 +219,7 @@ pub async fn main(user_input: &str) -> Result<()> {
         .unwrap_or("enabled");
     let reasoning;
     if reasoning_mode == "draft" {
-        reasoning = "enable"
+        reasoning = "enabled"
     } else {
         reasoning = reasoning_mode
     }
@@ -239,6 +239,7 @@ pub async fn main(user_input: &str) -> Result<()> {
         "tool_choice":  "auto",
         "max_tokens": 4096
     });
+    print_json(&payload);
     let client = Client::new();
     let url = format!("{}/chat/completions", base_url);
     loop {
