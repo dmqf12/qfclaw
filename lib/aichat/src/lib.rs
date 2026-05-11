@@ -1,0 +1,309 @@
+use std::fs;
+
+use futures::StreamExt;
+use reqwest::Client;
+use serde_json::{json, Value};
+use anyhow::{anyhow, Context, Result};
+use std::collections::BTreeMap;
+use rand;
+
+use toolcall::toolcall;
+use sendmsg::*;
+
+
+
+
+struct StreamProcessor {
+    full_response: String,
+    full_reasoning: String,
+    start_response: bool,
+    tool_calls_map: BTreeMap<u64, (String, String)>,
+    usage: Option<Value>,
+    reasoning_mode: String
+}
+
+impl StreamProcessor {
+    fn new() -> Self {
+        Self {
+            full_response: String::new(),
+            full_reasoning: String::new(),
+            start_response: false,
+            tool_calls_map: BTreeMap::new(),
+            usage: None,
+            reasoning_mode: String::new()
+        }
+    }
+
+    async fn process_chunk(&mut self, chunk: &[u8], reasoning_mode: &str) -> Result<Option<Value>, anyhow::Error> {
+        self.reasoning_mode = reasoning_mode.to_string();
+        let text = String::from_utf8_lossy(chunk);
+        for line in text.lines().map(|s| s.trim()) {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if data == "[DONE]" {
+                    return Ok(self.finalize().await);
+                }
+                let _ = self.process_data_line(data).await;
+            }
+        }
+        Ok(None)
+    }
+
+    async fn process_data_line(&mut self, data: &str) -> Result<(), anyhow::Error> {
+        let mut chunk: Value = json!({});
+        match serde_json::from_str::<Value>(data) {
+            Ok(resp) => chunk = resp,
+            Err(e) => println!("{}---{}", e, data),
+        }
+        
+        // 1. 记录 usage
+        if let Some(usage) = chunk.get("usage") {
+            self.usage = Some(usage.clone());
+        }
+
+        // 2. 提取 delta
+        let delta = &chunk["choices"][0]["delta"];
+
+        // 3. 处理 reasoning
+        if let Some(reasoning) = delta["reasoning_content"].as_str() {
+            self.full_reasoning.push_str(reasoning);
+            if !self.start_response && self.full_reasoning.len() % 64 == 0 {
+                self.send_draft(&format!("Reasoning 🧠\n{}", self.full_reasoning)).await;
+            }
+        }
+
+        // 4. 处理 content
+        if let Some(content) = delta["content"].as_str() {
+            if !self.start_response {
+                self.start_response = true;
+                self.flush_reasoning().await;
+            }
+            self.full_response.push_str(content);
+            if self.full_response.len() % 64 == 0 {
+                self.send_draft(&self.full_response).await;
+            }
+        }
+
+        // 5. 处理 tool_calls
+        if let Some(tool_calls) = delta["tool_calls"].as_array() {
+            for tc in tool_calls {
+                if let Some(idx) = tc["index"].as_u64() {
+                    let entry = self.tool_calls_map.entry(idx).or_default();
+                    if let Some(function) = tc.get("function") {
+                        if let Some(name) = function["name"].as_str() {
+                            entry.0.push_str(name);
+                        }
+                        if let Some(args) = function["arguments"].as_str() {
+                            entry.1.push_str(args);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn finalize(&mut self) -> Option<Value> {
+
+        let mut message = json!({ "role": "assistant" });
+        if !self.full_reasoning.is_empty() { message["reasoning_content"] = json!(self.full_reasoning); }
+        if !self.full_response.is_empty() { message["content"] = json!(self.full_response); }
+
+        if !self.tool_calls_map.is_empty() {
+            message["tool_calls"] = json!(self.tool_calls_map.iter().map(|(idx, (n, a))| {
+                json!({
+                    "id": format!("call_{}_{}", idx, rand::random::<u32>()),
+                    "type": "function",
+                    "function": { "name": n, "arguments": a }
+                })
+            }).collect::<Vec<_>>());
+        }
+
+        Some(json!({
+            "choices": [{ "finish_reason": "stop", "message": message }],
+            "usage": self.usage.take().unwrap_or(json!({}))
+        }))
+    }
+
+    async fn flush_reasoning(&self) {
+        if !self.full_reasoning.is_empty() {
+            let msg_send = SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning));
+            if self.reasoning_mode == "draft" {
+                _ = msg_send.is_draft().send().await;
+            } else {
+                _ = msg_send.fold().send().await;
+            }
+        }
+    }
+
+    async fn send_draft(&self, text: &str) {
+        let _ = SendMessage::new(text).is_draft().send().await;
+    }
+}
+
+
+
+
+fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
+    let content = chat_result["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or_default();
+    let reasoning = chat_result["choices"][0]["message"]["reasoning_content"]
+        .as_str()
+        .unwrap_or_default();   
+    // 直接取出 Value，如果是 None 则创建新的空数组
+    let tool_calls = chat_result["choices"][0]["message"]
+        .get("tool_calls")
+        .map(|v| v.clone())
+        .unwrap_or_else(|| Value::Array(Vec::new()));    
+    let total_tokens = chat_result["usage"]["total_tokens"]
+        .as_u64()
+        .unwrap_or(0);    
+    (content.to_string(), reasoning.to_string(), tool_calls, total_tokens)
+}
+
+
+pub async fn main(user_input: &str) -> Result<()> {
+    println!("{}", user_input);
+    if user_input.is_empty() {
+        return Ok(())
+    }
+
+    //  检查对话记录
+    let messages_path = "messages/";
+    fs::create_dir_all(&messages_path)?;  // 已存在时不会报错
+    let msg_file = format!("{}/messages.json", &messages_path);
+    let mut messages = fs::File::open(&msg_file)
+        .ok()
+        .and_then(|file| serde_json::from_reader(file).ok())
+        .unwrap_or_else(|| vec![]);
+
+    let system_prompt = fs::read_to_string("workspace/SOUL.md")?;
+    messages.insert(0, json!({"role": "system", "content": &system_prompt}));
+
+    //  获取模型配置信息
+    let mut model_config = json!(null);
+    let mut model: Value = json!(null);
+    if let Ok(model_file) = fs::File::open("config/models.json") {
+        let model_list: Value = serde_json::from_reader(model_file)?;
+        let model_name = model_list["use_model"]
+            .as_str()
+            .unwrap_or_default();
+        model_config = model_list
+            .get("config")
+            .ok_or_else(|| anyhow!("models.json解析失败"))?
+            .clone();
+        model = model_list
+            .get(model_name)
+            .ok_or_else(|| anyhow!("models.json解析失败"))?
+            .clone();
+    }
+    if model.is_null() {
+        return Err(anyhow!("models.json解析失败或不存在"));
+    }
+
+    let api_key = model["token"]
+        .as_str()
+        .unwrap_or_default();
+    let base_url = model["base_url"]
+        .as_str()
+        .unwrap_or("https://api.deepseek.com/v1");
+    let model_name = model["model_name"]
+        .as_str()
+        .unwrap_or_default();
+    let stream: bool = model_config["stream"]
+        .as_bool()
+        .unwrap_or(true);
+    let reasoning_mode = model_config["reasoning"]
+        .as_str()
+        .unwrap_or("enabled");
+    let reasoning;
+    if reasoning_mode == "draft" {
+        reasoning = "enable"
+    } else {
+        reasoning = reasoning_mode
+    }
+    messages.push(json!({"role": "user", "content": &user_input}));
+    
+    let func: serde_json::Value = fs::File::open("config/function_call.json")
+        .ok()
+        .and_then(|file| serde_json::from_reader(file).ok())
+        .unwrap();
+    //  发送并保存模型输出
+    let mut payload = json!({
+        "model": model_name,
+        "stream": stream,
+        "thinking": {"type":reasoning},
+        "messages": messages,
+        "tools": func,
+        "tool_choice":  "auto",
+        "max_tokens": 4096
+    });
+    let client = Client::new();
+    let url = format!("{}/chat/completions", base_url);
+    loop {
+        let mut reply: Value = json!({});
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_json: Value = response.json().await.context("请求失败")?;
+            print_json(&error_json);
+            let error_message = error_json["error"]["message"]
+                .as_str()
+                .unwrap_or("请求失败");
+            return Err(anyhow!("API 请求失败: {}", error_message));
+        }
+        if !stream {
+            reply = response.json().await?;
+        } else {
+            println!("{}", reasoning_mode);
+            let mut processor = StreamProcessor::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.context("读取流失败")?;
+                if let Some(final_value) = processor.process_chunk(&chunk, &reasoning_mode).await? {
+                    reply = final_value;
+                }
+            }
+        }
+
+        // print_json(&reply);
+        let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
+
+        let session_file = "messages/session.json";
+        let mut session: Value = fs::File::open(session_file)
+            .ok()
+            .and_then(|file| serde_json::from_reader(file).ok())
+            .unwrap_or_default();
+        session["total_tokens"] = total_tokens.into();
+        serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
+
+
+        if !content.is_empty() {
+            let _ = SendMessage::new(&content).send().await;
+        }
+
+        if let Some(arr) = tool_calls.as_array() && !arr.is_empty() {
+            messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning, "tool_calls": tool_calls}));
+            let tool_calls_result = toolcall(tool_calls).await;
+            messages.extend(tool_calls_result.as_array().unwrap().clone());
+            payload["messages"] = Value::Array(messages.clone());
+            serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
+            fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+        } else {
+            messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning}));
+            serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
+            fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+            break
+
+        }
+    }
+    Ok(())
+}
+

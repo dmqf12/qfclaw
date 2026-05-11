@@ -1,0 +1,87 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "read",
+      "description": "读取本地文件系统中的文件内容",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string", "description": "文件的绝对或相对路径" }
+        },
+        "required": ["file"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "write",
+      "description": "向文件写入内容",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string", "description": "文件名，可包含绝对或相对路径" },
+          "text": { "type": "string", "description": "要写入文件的内容" }
+        },
+        "required": ["file", "text"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "exec",
+      "description": "执行命令",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string", "description": "单个命令或者bash脚本" }
+        },
+        "required": ["command"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete",
+      "description": "删除文件",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string", "description": "要删除的文件名" }
+        },
+        "required": ["file"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search",
+      "description": "通过duckduckgo搜索信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "第一行是需要返回的条数，第二行是搜索关键词" }
+        },
+        "required": ["text"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "cex_info",
+      "description": "获取加密货币价格，以及用户的交易所余额，获取余额用balance表示，多个查询用空格隔开",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "币种名" }
+        },
+        "required": ["text"]
+      }
+    }
+  }
+]

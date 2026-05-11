@@ -1,0 +1,15 @@
+[package]
+name = "command"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+sendmsg = { path = "../sendmsg" }
+aichat = { path = "../aichat" }
+chrono = "0.4"
+#tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
