@@ -129,7 +129,9 @@ impl StreamProcessor {
         if !self.full_reasoning.is_empty() {
             let msg_send = SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning));
             if self.reasoning_mode == "draft" {
-                _ = msg_send.is_draft().send().await;
+                if let Ok((msg_id, _)) = msg_send.send().await {
+                    clear_up(msg_id, msg_id).await;
+                }
             } else {
                 _ = msg_send.fold().send().await;
             }
@@ -239,7 +241,6 @@ pub async fn main(user_input: &str) -> Result<()> {
         "tool_choice":  "auto",
         "max_tokens": 4096
     });
-    print_json(&payload);
     let client = Client::new();
     let url = format!("{}/chat/completions", base_url);
     loop {
