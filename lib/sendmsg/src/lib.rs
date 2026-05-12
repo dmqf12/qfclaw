@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use anyhow::Result;
 use regex::Regex;
 
+
+
 fn escape_markdown_v2(text: &str) -> String {
     let special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
     let mut escaped = String::new();
@@ -49,6 +51,7 @@ pub static ALLOW_ID: Lazy<i64> = Lazy::new(|| {
         .and_then(|json| json["allow_id"].as_i64())
         .unwrap_or(0)
 });
+
 
 
 fn get_callback_data(msg: &Value) -> (String, String, u64) {

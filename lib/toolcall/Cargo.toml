@@ -18,3 +18,5 @@ hmac = "0.13"
 sha2 = "0.11"
 base64 = "0.22"
 chrono = "0.4"
+uuid = { version = "1.23.1", features = ["v4"] }
+lazy_static = "1.5.0"

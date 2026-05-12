@@ -6,8 +6,9 @@ use serde_json::{json, Value};
 use anyhow::{anyhow, Context, Result};
 use std::collections::BTreeMap;
 use rand;
+use tokio::sync::{mpsc, oneshot};
 
-use toolcall::toolcall;
+use toolcall::*;
 use sendmsg::*;
 
 
@@ -139,7 +140,7 @@ impl StreamProcessor {
     }
 
     async fn send_draft(&self, text: &str) {
-        let _ = SendMessage::new(text).is_draft().send().await;
+        _ = SendMessage::new(&text).is_draft().send().await;
     }
 }
 
@@ -164,9 +165,48 @@ fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
     (content.to_string(), reasoning.to_string(), tool_calls, total_tokens)
 }
 
+async fn chat(api_key: &str, base_url: &str, payload: &Value, show_reasoning_mode: &str) -> Result<serde_json::Value> {
+    let client = Client::new();
+    let url = format!("{}/chat/completions", base_url);
+    let stream_out = payload["stream"]
+        .as_bool()
+        .unwrap_or(true);
+    let response = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
 
+    if !response.status().is_success() {
+        let error_json: Value = response.json().await.context("请求失败")?;
+        print_json(&error_json);
+        let error_message = error_json["error"]["message"]
+            .as_str()
+            .unwrap_or("请求失败");
+        return Err(anyhow!("API 请求失败: {}", error_message));
+    }
 
-fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String, bool)> {
+    if !stream_out {
+        let chat_response: Value = response.json().await?;
+        return Ok(chat_response)
+            
+            
+    } else {
+        let mut processor = StreamProcessor::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("读取流失败")?;
+            if let Some(final_value) = processor.process_chunk(&chunk, &show_reasoning_mode).await? {
+                return Ok(final_value);
+            }
+        }
+        Err(anyhow!("流已结束但未收到完整响应"))
+    }
+}
+
+fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)> {
     println!("{}", user_input);
     if user_input.is_empty() {
         return Err(anyhow!("空消息"))
@@ -250,48 +290,48 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String, 
         "tool_choice":  "auto",
         "max_tokens": 4096
     });
-    return Ok((payload, messages, base_url.to_string(), api_key.to_string(), show_reasoning_mode.to_string(), stream));
+    return Ok((payload, messages, base_url.to_string(), api_key.to_string(), show_reasoning_mode.to_string()));
 }
 
-pub async fn main(user_input: &str) -> Result<()> {
-    let (mut payload, mut messages, base_url, api_key, show_reasoning_mode, stream) = init(user_input)?;
+
+fn 修改超时(tool_calls: &Value) -> Value {
+    let mut results = Vec::new();
+    if let Some(array) = tool_calls.as_array() {
+        for element in array {
+            let name = element["function"]["name"].as_str().unwrap_or_default();
+            let call_id = element["id"].as_str().unwrap_or_default();
+            let mut args: Value = serde_json::from_str(
+                element["function"]["arguments"].as_str().unwrap_or_default()
+                ).unwrap_or(json!({}));
+            if name == "exec" {
+                args["timeout"] = json!(1);
+            }
+            results.push(json!({"id": call_id, "type": "function", "function":{"name": name, "arguments": args.to_string()}}));
+            print_json(&json!(results));
+        }
+    }
+    return json!(results);
+}
+
+
+pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
+    let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(user_input)?;
     let msg_file = "messages/messages.json";
 
-    let client = Client::new();
-    let url = format!("{}/chat/completions", base_url);
+    // --- 修改点 1: 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
+    let (tool_tx, tool_rx) = mpsc::channel::<ToolRequest>(32);
+    tokio::spawn(toolcall(tool_rx)); // 后台任务持续运行，接收请求
+
     loop {
-        let mut reply: Value = json!({});
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let error_json: Value = response.json().await.context("请求失败")?;
-            print_json(&error_json);
-            let error_message = error_json["error"]["message"]
-                .as_str()
-                .unwrap_or("请求失败");
-            return Err(anyhow!("API 请求失败: {}", error_message));
-        }
-        if !stream {
-            reply = response.json().await?;
-        } else {
-            let mut processor = StreamProcessor::new();
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.context("读取流失败")?;
-                if let Some(final_value) = processor.process_chunk(&chunk, &show_reasoning_mode).await? {
-                    reply = final_value;
-                }
+        let reply: Value = match chat(&api_key, &base_url, &payload, &show_reasoning_mode).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let _ = SendMessage::new(&e.to_string()).send().await;
+                break
             }
-        }
+        };
 
-        // print_json(&reply);
-        let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
+        let (content, reasoning, mut tool_calls, total_tokens) = extract_chat_result(&reply);
 
         let session_file = "messages/session.json";
         let mut session: Value = fs::File::open(session_file)
@@ -301,24 +341,54 @@ pub async fn main(user_input: &str) -> Result<()> {
         session["total_tokens"] = total_tokens.into();
         serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
 
-
         if !content.is_empty() {
             let _ = SendMessage::new(&content).send().await;
         }
-
+        let mut have_new_msg = false;
+        let mut new_msg_content = String::new();
         if let Some(arr) = tool_calls.as_array() && !arr.is_empty() {
+            if let Ok(new_msg) = rx.try_recv() {
+                println!("收到消息:   {}", new_msg);
+                tool_calls = 修改超时(&tool_calls);
+                have_new_msg = true;
+                new_msg_content = new_msg.clone();
+            }
             messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning, "tool_calls": tool_calls}));
-            let tool_calls_result = toolcall(tool_calls).await;
+
+            // --- 修改点 2: 每次 tool_call 时创建一个 oneshot 通道用于接收反馈 ---
+            let (tx_feedback, rx_feedback) = oneshot::channel::<Value>();
+            
+            let request = ToolRequest { 
+                payload: tool_calls, 
+                resp_tx: tx_feedback // 把 oneshot 的发送端传给任务
+            };
+
+            let mut tool_calls_result = json!([]);
+            
+            // 使用 mpsc 发送请求
+            if tool_tx.send(request).await.is_ok() {
+                // 等待 oneshot 反馈结果
+                match rx_feedback.await {
+                    Ok(feedback) => {
+                        tool_calls_result = feedback;
+                    }
+                    Err(_) => println!("接收反馈失败（后台任务可能已崩溃或关闭）"),
+                }
+            }
+
             messages.extend(tool_calls_result.as_array().unwrap().clone());
             payload["messages"] = Value::Array(messages.clone());
             serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
             fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+            if have_new_msg {
+                messages.push(json!({"role": "user", "content": new_msg_content}));
+                println!("已经添加📧");
+            }
         } else {
             messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning}));
             serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
             fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
             break
-
         }
     }
     Ok(())

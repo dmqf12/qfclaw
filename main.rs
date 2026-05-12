@@ -1,7 +1,8 @@
 use sendmsg::*;
-use serde_json::{Value, json};
+use serde_json::{Value};
 use std::time::Duration;
 use tokio::sync::mpsc;
+
 
 fn get_msg(msg: &Value) -> (String, i64) {
     let text = msg["message"]["text"].as_str().unwrap_or("").to_string();
@@ -10,6 +11,9 @@ fn get_msg(msg: &Value) -> (String, i64) {
 }
 
 async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
+    // 在循环外定义，以维持单任务状态
+    let mut current_task: Option<(tokio::task::JoinHandle<()>, mpsc::Sender<String>)> = None;
+
     while let Some(payload) = rx.recv().await {
         let (user_input, chat_id) = get_msg(&payload);
         let allow_list: [i64; 1] = [*ALLOW_ID];
@@ -45,13 +49,33 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             continue;
         }
 
-        tokio::spawn(async move {
-            if let Err(e) = aichat::main(&user_input).await {
-                _ = SendMessage::new(&e.to_string()).send().await;
+        // --- 核心逻辑修改：管理单任务后台进程 ---
+        
+        // 1. 检查当前任务是否已运行结束（如果是，则重置）
+        if let Some((handle, _)) = &current_task {
+            if handle.is_finished() {
+                current_task = None;
             }
-        });
+        }
+
+        // 2. 如果没有任务正在运行，则启动它
+        if current_task.is_none() {
+            let (tx, rx_chat) = mpsc::channel::<String>(32);
+            let first_input = user_input.clone();
+            let handle = tokio::spawn(async move {
+                // 假设 aichat::main 现在接收 rx_chat 
+                if let Err(e) = aichat::main(&first_input, rx_chat).await {
+                    _ = SendMessage::new(&e.to_string()).send().await;
+                }
+            });
+            current_task = Some((handle, tx));
+        } else if let Some((_, tx)) = &current_task {
+            // 3. 如果任务已在运行，通过通道发送新消息
+            let _ = tx.send(user_input).await;
+        }
     }
 }
+
 
 async fn getupdates_receive(tx: mpsc::Sender<Value>) {
     let client = reqwest::Client::new();
@@ -66,16 +90,14 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
             Ok(response) => match response.json::<Value>().await {
                 Ok(json_response) => {
                     if let Some(results) = json_response["result"].as_array() {
-                        if !results.is_empty() {
-                            print_json(&json!(results));
-                        } else {
+                        if results.is_empty() {
                             println!("暂无消息");
                         }
                         for update in results {
                             if let Some(id) = update["update_id"].as_i64() {
                                 last_update_id = id + 1;
                             }
-                            print_json(&update);
+                            //    print_json(&update);
                             let _ = tx.send(update.clone()).await;
                         }
                     }

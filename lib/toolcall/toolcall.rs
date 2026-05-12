@@ -1,17 +1,16 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::process::Command;
+// use std::io::Read;
 
-use serde_json::{json, Value};
+
 use reqwest::Client;
 use chrono::Utc;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use sha2::Sha256;
 use hmac::{KeyInit, Hmac, Mac};
-
+use tokio::sync::{oneshot};
 use sendmsg::*;
-
 
 
 async fn get_coin_price(coin: &str) -> String {
@@ -148,24 +147,6 @@ async fn write(file: &str, text: &str) -> String {
     }
 }
 
-async fn exec(text: &str) -> String {
-    println!("⚡执行：{}", text);
-    let _ = SendMessage::new(&format!("⚡执行：{}", text)).fold().send().await;
-    let result = match Command::new("bash")
-        .arg("-c")
-        .arg(format!("cd workspace\n{}", text))
-        .output()
-    {
-        Ok(r) => r,
-        Err(_) => return "执行失败".to_string(),
-    };
-    let mut output = String::from_utf8_lossy(&result.stdout).to_string();
-    let error = String::from_utf8_lossy(&result.stderr).to_string();
-    if !error.is_empty() {
-        output = format!("{}错误信息：\n{}", output, error);
-    }
-    output
-}
 
 async fn delete(file: &str) -> String {
     println!("🗑️删除：{}", file);
@@ -192,11 +173,12 @@ fn split_input(input: &str) -> (i32, &str) {
 }
 
 
-fn just_exec(text: &str) -> String {
+async fn just_exec(text: &str) -> String {
     let result = match Command::new("bash")
         .arg("-c")
         .arg(format!("cd workspace\n{}", text))
         .output()
+        .await   // 必须 .await
     {
         Ok(r) => r,
         Err(_) => return "执行失败".to_string(),
@@ -214,7 +196,7 @@ async fn search(text: &str) -> String {
     let (num, content) = split_input(text);
     println!("🔍搜索：{} {}条", content, num);
     let _ = SendMessage::new(&format!("🔍搜索：{} {}条", content, num)).parse("").send().await;
-    let result = just_exec(&format!("python3 skill/search.py \"{}\" {}", content, num));
+    let result = just_exec(&format!("python3 skill/search.py \"{}\" {}", content, num)).await;
     result
 }
 
@@ -234,12 +216,6 @@ async fn tool_run(tool_name: &str, parame: &Value) -> String {
             .as_str()
             .unwrap_or("");
         return write(file, text).await
-    }
-    if tool_name == "exec" {
-        let command = parame["command"]
-            .as_str()
-            .unwrap_or("");
-        return exec(command).await
     }
     if tool_name == "delete" {
         let file = parame["file"]
@@ -262,27 +238,143 @@ async fn tool_run(tool_name: &str, parame: &Value) -> String {
     String::new()
 }
 
-pub async fn toolcall(func: Value) -> Value {
-    println!("{}", func);
-    let mut result = Vec::new();
-    if let Some(array) = func.as_array() {
-        for element in array {
-            let name = element["function"]["name"]
-                .as_str()
-                .unwrap_or_default();
-            let arg = element["function"]["arguments"]
-                .as_str()
-                .unwrap_or_default();
-            let call_id = element["id"]
-                .as_str()
-                .unwrap_or_default();
-            let v: Value = serde_json::from_str(&arg)
-                .unwrap_or(json!({}));
-            result.push(json!({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": tool_run(&name, &v).await}));
+
+pub struct ToolRequest {
+    pub payload: Value,
+    pub resp_tx: oneshot::Sender<Value>,
+}
+
+use tokio::process::{Command, Child};
+use tokio::sync::Mutex;
+use tokio::io::AsyncReadExt;
+use tokio::time::{timeout, Duration};
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::Arc;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+// --- 结构定义 ---
+
+struct TaskHandle {
+    child: Child,
+    output: Arc<Mutex<String>>,
+}
+
+lazy_static::lazy_static! {
+    static ref TASKS: Arc<Mutex<HashMap<String, TaskHandle>>> = Arc::new(Mutex::new(HashMap::new()));
+}
+
+
+async fn notify(msg: &str) {
+    println!("{}", msg);
+    let _ = SendMessage::new(msg).fold().send().await;
+}
+
+// --- 核心业务逻辑 ---
+
+async fn exec(params: Value) -> String {
+    let cmd_text = params["command"].as_str().unwrap_or("");
+    let timeout_secs = params["timeout"].as_u64().unwrap_or(30);
+    let task_id = Uuid::new_v4().to_string();
+    println!("⚡️执行：{}", cmd_text);
+    let _ = SendMessage::new(&format!("⚡️执行：{}", cmd_text)).fold().send().await;
+    let mut child = Command::new("bash")
+        .arg("-c")
+        .arg(format!("cd workspace && {}", cmd_text))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn");
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let output_buf = Arc::new(Mutex::new(String::new()));
+    let output_clone = output_buf.clone();
+
+    // 1. 实时读取输出
+    tokio::spawn(async move {
+        let mut reader = stdout.chain(stderr);
+        let mut buffer = [0; 1024];
+        while let Ok(n) = reader.read(&mut buffer).await {
+            if n == 0 { break; }
+            output_clone.lock().await.push_str(&String::from_utf8_lossy(&buffer[..n]));
+        }
+    });
+
+    // 2. 等待策略
+    match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
+        Ok(status) => {
+            let log = output_buf.lock().await.clone();
+            let code = status.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
+            format!("✅ 任务立即完成 (Code {}):\n{}", code, log)
+        }
+        Err(_) => {
+            TASKS.lock().await.insert(
+                task_id.clone(),
+                TaskHandle { child, output: output_buf.clone() }
+            );
+            let current_log = output_buf.lock().await.clone();
+            let msg = format!("⏳ 任务超时转入后台，ID: {}", task_id);
+            notify(&msg).await;
+            format!("{}\n当前输出:\n{}", msg, current_log)
         }
     }
-    return json!(result)
+}
+
+async fn check_task(params: Value) -> String {
+    let task_id = params["task_id"].as_str().unwrap_or("");
+    let order = params["order"].as_str().unwrap_or("check");
+    println!("👌🏻查询：{}", task_id);
+    let _ = SendMessage::new(&format!("👌🏻查询：{}", task_id)).fold().send().await;
+    let mut tasks = TASKS.lock().await;
+    let task = match tasks.get_mut(task_id) {
+        Some(t) => t,
+        None => return "❌ 错误：未找到任务".to_string(),
+    };
+
+    match order {
+        "kill" => {
+            let _ = task.child.kill().await;
+            tasks.remove(task_id);
+            let msg = format!("🛑 终止任务：{}", task_id);
+            notify(&msg).await;
+            msg
+        }
+        "check" => {
+            let log = task.output.lock().await;
+            if log.is_empty() { "等待输出...".to_string() } else { log.clone() }
+        }
+        _ => "未知指令".to_string(),
+    }
+}
+
+// --- 接口分发 ---
+
+pub async fn toolcall(mut rx: tokio::sync::mpsc::Receiver<ToolRequest>) {
+    while let Some(req) = rx.recv().await {
+        let mut results = Vec::new();
+        if let Some(array) = req.payload.as_array() {
+            for element in array {
+                let name = element["function"]["name"].as_str().unwrap_or_default();
+                let call_id = element["id"].as_str().unwrap_or_default();
+                let args: Value = serde_json::from_str(
+                    element["function"]["arguments"].as_str().unwrap_or_default()
+                ).unwrap_or(json!({}));
+
+                let run_result = match name {
+                    "exec" => exec(args).await,
+                    "check_task" => check_task(args).await,
+                    _ => tool_run(name, &args).await,
+                };
+
+                results.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": run_result
+                }));
+            }
+        }
+        let _ = req.resp_tx.send(json!(results));
+    }
 }

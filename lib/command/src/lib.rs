@@ -6,7 +6,7 @@ use anyhow::Result;
 use chrono::Local;
 use serde_json::{Value, json};
 //use reqwest::Client;
-use aichat;
+//use aichat;
 use sendmsg::*;
 
 fn date_now() -> String {
@@ -17,6 +17,7 @@ fn date_now() -> String {
     format!("{}-{}", Local::now().date_naive(), ts)
 }
 
+/*
 async fn retry(text: &str, msg: &Value) {
     let messages: Vec<serde_json::Value> = fs::File::open("messages/messages.json")
         .ok()
@@ -78,7 +79,7 @@ async fn retry(text: &str, msg: &Value) {
     let _ = SendMessage::new("❓当前会话找不到此消息").send().await;
     return;
 }
-
+*/
 pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
     let session_file = "messages/session.json";
 
@@ -109,7 +110,8 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         };
     }
     if cmd_text.contains("/retry") {
-        retry(cmd_text, msg).await
+        println!("/retry");
+        //  retry(cmd_text, msg).await
     }
     if cmd_text == "/status" {
         let session: Value = fs::File::open(session_file)
