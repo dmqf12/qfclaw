@@ -293,7 +293,7 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
     return Ok((payload, messages, base_url.to_string(), api_key.to_string(), show_reasoning_mode.to_string()));
 }
 
-
+/*
 fn 修改超时(tool_calls: &Value) -> Value {
     let mut results = Vec::new();
     if let Some(array) = tool_calls.as_array() {
@@ -312,7 +312,22 @@ fn 修改超时(tool_calls: &Value) -> Value {
     }
     return json!(results);
 }
+*/
 
+fn 打断(tool_calls: &Value) -> Value {
+    let mut results = Vec::new();
+    if let Some(array) = tool_calls.as_array() {
+        for element in array {
+            let call_id = element["id"].as_str().unwrap_or_default();
+            results.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": "用户打断",
+            }));
+        }
+    }
+    return json!(results);
+}
 
 pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
     let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(user_input)?;
@@ -331,7 +346,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
             }
         };
 
-        let (content, reasoning, mut tool_calls, total_tokens) = extract_chat_result(&reply);
+        let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
 
         let session_file = "messages/session.json";
         let mut session: Value = fs::File::open(session_file)
@@ -346,15 +361,19 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
         }
         let mut have_new_msg = false;
         let mut new_msg_content = String::new();
+        if let Ok(new_msg) = rx.try_recv() {
+            println!("收到消息:   {}", new_msg);
+            have_new_msg = true;
+            new_msg_content = new_msg.clone();
+        }
         if let Some(arr) = tool_calls.as_array() && !arr.is_empty() {
-            if let Ok(new_msg) = rx.try_recv() {
-                println!("收到消息:   {}", new_msg);
-                tool_calls = 修改超时(&tool_calls);
-                have_new_msg = true;
-                new_msg_content = new_msg.clone();
-            }
-            messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning, "tool_calls": tool_calls}));
 
+            messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning, "tool_calls": tool_calls}));
+            if have_new_msg {
+                messages.extend(打断(&tool_calls).as_array().unwrap().clone());
+                messages.push(json!({"role": "user", "content": new_msg_content}));
+                println!("打断❓");
+            }
             // --- 修改点 2: 每次 tool_call 时创建一个 oneshot 通道用于接收反馈 ---
             let (tx_feedback, rx_feedback) = oneshot::channel::<Value>();
             
@@ -380,10 +399,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
             payload["messages"] = Value::Array(messages.clone());
             serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
             fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
-            if have_new_msg {
-                messages.push(json!({"role": "user", "content": new_msg_content}));
-                println!("已经添加📧");
-            }
+
         } else {
             messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning}));
             serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
