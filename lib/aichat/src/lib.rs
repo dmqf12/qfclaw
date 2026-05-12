@@ -19,7 +19,7 @@ struct StreamProcessor {
     start_response: bool,
     tool_calls_map: BTreeMap<u64, (String, String)>,
     usage: Option<Value>,
-    reasoning_mode: String
+    show_reasoning_mode: String
 }
 
 impl StreamProcessor {
@@ -30,12 +30,12 @@ impl StreamProcessor {
             start_response: false,
             tool_calls_map: BTreeMap::new(),
             usage: None,
-            reasoning_mode: String::new()
+            show_reasoning_mode: String::new()
         }
     }
 
-    async fn process_chunk(&mut self, chunk: &[u8], reasoning_mode: &str) -> Result<Option<Value>, anyhow::Error> {
-        self.reasoning_mode = reasoning_mode.to_string();
+    async fn process_chunk(&mut self, chunk: &[u8], show_reasoning_mode: &str) -> Result<Option<Value>, anyhow::Error> {
+        self.show_reasoning_mode = show_reasoning_mode.to_string();
         let text = String::from_utf8_lossy(chunk);
         for line in text.lines().map(|s| s.trim()) {
             if let Some(data) = line.strip_prefix("data: ") {
@@ -128,7 +128,7 @@ impl StreamProcessor {
     async fn flush_reasoning(&self) {
         if !self.full_reasoning.is_empty() {
             let msg_send = SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning));
-            if self.reasoning_mode == "draft" {
+            if self.show_reasoning_mode == "draft" {
                 if let Ok((msg_id, _)) = msg_send.send().await {
                     clear_up(msg_id, msg_id, 5);
                 }
@@ -219,14 +219,17 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String, 
     let stream: bool = model_config["stream"]
         .as_bool()
         .unwrap_or(true);
-    let reasoning_mode = model_config["reasoning"]
+    let mut show_reasoning_mode = model_config["reasoning"]
         .as_str()
         .unwrap_or("enabled");
-    let reasoning;
-    if reasoning_mode == "draft" {
-        reasoning = "enabled"
-    } else {
-        reasoning = reasoning_mode
+    let mut reasoning = show_reasoning_mode;
+    if show_reasoning_mode.contains("draft") {
+        show_reasoning_mode = "draft";
+        reasoning = show_reasoning_mode.split('_').last();
+    }
+    if show_reasoning_mode.contains("fold") {
+        show_reasoning_mode = "fold";
+        reasoning = show_reasoning_mode.split('_').last();
     }
     messages.push(json!({"role": "user", "content": user_input}));
     
@@ -244,11 +247,11 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String, 
         "tool_choice":  "auto",
         "max_tokens": 4096
     });
-    return Ok((payload, messages, base_url.to_string(), api_key.to_string(), reasoning_mode.to_string(), stream));
+    return Ok((payload, messages, base_url.to_string(), api_key.to_string(), show_reasoning_mode.to_string(), stream));
 }
 
 pub async fn main(user_input: &str) -> Result<()> {
-    let (mut payload, mut messages, base_url, api_key, reasoning_mode, stream) = init(user_input)?;
+    let (mut payload, mut messages, base_url, api_key, show_reasoning_mode, stream) = init(user_input)?;
     let msg_file = "messages/messages.json";
 
     let client = Client::new();
@@ -278,7 +281,7 @@ pub async fn main(user_input: &str) -> Result<()> {
             let mut stream = response.bytes_stream();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.context("读取流失败")?;
-                if let Some(final_value) = processor.process_chunk(&chunk, &reasoning_mode).await? {
+                if let Some(final_value) = processor.process_chunk(&chunk, &show_reasoning_mode).await? {
                     reply = final_value;
                 }
             }
