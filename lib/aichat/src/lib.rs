@@ -373,6 +373,10 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
                 messages.extend(打断(&tool_calls).as_array().unwrap().clone());
                 messages.push(json!({"role": "user", "content": new_msg_content}));
                 println!("打断❓");
+                payload["messages"] = Value::Array(messages.clone());
+                serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
+                fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+                continue
             }
             // --- 修改点 2: 每次 tool_call 时创建一个 oneshot 通道用于接收反馈 ---
             let (tx_feedback, rx_feedback) = oneshot::channel::<Value>();
