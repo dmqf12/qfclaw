@@ -277,8 +277,7 @@ async fn exec(params: Value) -> String {
     let cmd_text = params["command"].as_str().unwrap_or("");
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
-    println!("⚡️执行：{}", cmd_text);
-    let _ = SendMessage::new(&format!("⚡️执行：{}", cmd_text)).fold().send().await;
+    notify(&format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs)).await;
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(format!("cd workspace && {}", cmd_text))
