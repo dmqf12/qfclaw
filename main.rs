@@ -15,7 +15,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         let allow_list: [i64; 1] = [*ALLOW_ID];
         
         if !allow_list.contains(&chat_id) {
-            let _ = SendMessage::new("❌您没有权限使用此机器人")
+            _ = SendMessage::new("❌您没有权限使用此机器人")
                 .id(chat_id)
                 .send()
                 .await;
@@ -39,7 +39,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         {
             tokio::spawn(async move {
                 if let Err(_) = command::exec_cmd(&user_input, &payload).await {
-                    let _ = SendMessage::new("❌指令执行失败").send().await;
+                    _ = SendMessage::new("❌指令执行失败").send().await;
                 }
             });
             continue;
@@ -47,7 +47,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
 
         tokio::spawn(async move {
             if let Err(e) = aichat::main(&user_input).await {
-                let _ = SendMessage::new(&e.to_string()).send().await;
+                _ = SendMessage::new(&e.to_string()).send().await;
             }
         });
     }

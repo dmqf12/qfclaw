@@ -9,7 +9,7 @@ edition = "2024"
 once_cell = "1.19"
 regex = "1"
 
-
+tokio.workspace = true
 reqwest.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true

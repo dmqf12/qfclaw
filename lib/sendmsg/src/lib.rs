@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use reqwest::Client;
@@ -49,19 +50,27 @@ pub static ALLOW_ID: Lazy<i64> = Lazy::new(|| {
         .expect("无法读取 config/bot.json 文件或找不到 'allow_id' 字段")
 });
 
-fn get_callback_data(msg: &Value) -> (String, String) {
+fn get_callback_data(msg: &Value) -> (String, String, u64) {
     //  let chat_id = msg["callback_query"]["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_ID);
-    let data = msg["callback_query"]["data"].as_str().unwrap_or_default();
-    let callback_id = msg["callback_query"]["id"].as_str().unwrap_or_default();
-        /*  print_json(msg);
-    println!("{}❓❓❓", callback_id);  */
-    (callback_id.to_string(), data.to_string())
+    let data = msg["callback_query"]["data"]
+        .as_str()
+        .unwrap_or_default();
+    let callback_id = msg["callback_query"]["id"]
+        .as_str()
+        .unwrap_or_default();
+    let msg_id = msg["callback_query"]["message"]["message_id"]
+        .as_u64()
+        .unwrap_or(9999999);
+    print_json(msg);
+    (callback_id.to_string(), data.to_string(), msg_id)
 }
+
 
 async fn reply_callback(callback_id: &str) {
     let client = Client::new();
     let url = &format!("https://api.telegram.org/bot{}/answerCallbackQuery", *BOT_TOKEN);
-    let body = json!({ "callback_query_id": callback_id, "text": "操作成功", "show_alert": false});
+    let body = json!({ "callback_query_id": callback_id});
+    //    , "text": "操作成功", "show_alert": false});
     if let Ok(result) = client.post(url).json(&body).send().await {
          if let Ok(status) = result.json().await {
             print_json(&status);
@@ -69,8 +78,21 @@ async fn reply_callback(callback_id: &str) {
     }
 }
 pub async fn deal_callback(msg: &Value) -> Result<bool> {
-    let (callback_id, text) = get_callback_data(msg);
+    let (callback_id, text, msg_id) = get_callback_data(msg);
     if text.contains("reasoning") {
+        if text.contains("set") {
+            if text.contains("draft") {
+                clear_up(msg_id, msg_id, 0);
+                _ = send_inline("请选择推理模型", json!([
+            [{"text": "开启", "callback_data": "reasoning_draft_enabled"}, {"text": "适应", "callback_data": "reasoning_draft_adaptive"}] ])).await;
+            }
+            if text.contains("fold") {
+                clear_up(msg_id, msg_id, 0);
+                _ = send_inline("请选择推理模型", json!([
+            [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
+            }
+            return Ok(true)
+        }
         let models_file = "config/models.json";
         let mut models = fs::File::open(models_file)
             .ok()
@@ -80,6 +102,9 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         models["config"]["reasoning"] = json!(content);
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
+        clear_up(msg_id, msg_id, 0);
+        _ = SendMessage::new("✅操作成功").send().await;
+        
     }
     Ok(true)
 }
@@ -204,28 +229,32 @@ impl SendMessage {
 
 
 
-pub async fn clear_up(start_id: u64, end_id: u64) {
-    let client = Client::new();
-    let mut body = json!({"chat_id": *ALLOW_ID});
-    //  let mut interval = tokio::time::interval(Duration::from_millis(200));
 
-    for id in (start_id..=end_id).rev() {
-        //  interval.tick().await;
-        body["message_id"] = json!(id);
-        for attempt in 0..2 {
-            match client
-                .post(&format!(
-                    "https://api.telegram.org/bot{}/deleteMessage",
-                    *BOT_TOKEN
-                ))
-                .json(&body)
-                .send()
-                .await
-            {
-                Ok(_) => break,
-                Err(e) if attempt == 1 => eprintln!("删除 {id} 失败: {e}"),
-                Err(e) => eprintln!("删除 {id} 重试 {}: {e}", attempt + 1),
+pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
+    tokio::spawn(async move {
+        // 延迟 n 秒后开始删除
+        tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+
+        let client = Client::new();
+        let mut body = json!({"chat_id": *ALLOW_ID});
+
+        for id in (start_id..=end_id).rev() {
+            body["message_id"] = json!(id);
+            for attempt in 0..2 {
+                match client
+                    .post(&format!(
+                        "https://api.telegram.org/bot{}/deleteMessage",
+                        *BOT_TOKEN
+                    ))
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(_) => break,
+                    Err(e) if attempt == 1 => eprintln!("删除 {id} 失败: {e}"),
+                    Err(e) => eprintln!("删除 {id} 重试 {}: {e}", attempt + 1),
+                }
             }
         }
-    }
+    });
 }

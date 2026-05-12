@@ -130,7 +130,7 @@ impl StreamProcessor {
             let msg_send = SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning));
             if self.reasoning_mode == "draft" {
                 if let Ok((msg_id, _)) = msg_send.send().await {
-                    clear_up(msg_id, msg_id).await;
+                    clear_up(msg_id, msg_id, 5);
                 }
             } else {
                 _ = msg_send.fold().send().await;
@@ -165,17 +165,17 @@ fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
 }
 
 
-pub async fn main(user_input: &str) -> Result<()> {
+
+fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String, bool)> {
     println!("{}", user_input);
     if user_input.is_empty() {
-        return Ok(())
+        return Err(anyhow!("空消息"))
     }
-
     //  检查对话记录
     let messages_path = "messages/";
     fs::create_dir_all(&messages_path)?;  // 已存在时不会报错
     let msg_file = format!("{}/messages.json", &messages_path);
-    let mut messages = fs::File::open(&msg_file)
+    let mut messages: Vec<Value> = fs::File::open(&msg_file)
         .ok()
         .and_then(|file| serde_json::from_reader(file).ok())
         .unwrap_or_else(|| vec![]);
@@ -187,7 +187,10 @@ pub async fn main(user_input: &str) -> Result<()> {
     let mut model_config = json!(null);
     let mut model: Value = json!(null);
     if let Ok(model_file) = fs::File::open("config/models.json") {
-        let model_list: Value = serde_json::from_reader(model_file)?;
+        let model_list: Value = match serde_json::from_reader(model_file) {
+            Ok(resp) => resp,
+            Err(e) => return Err(anyhow!("model.json解析失败: {}", e))
+        };
         let model_name = model_list["use_model"]
             .as_str()
             .unwrap_or_default();
@@ -225,14 +228,14 @@ pub async fn main(user_input: &str) -> Result<()> {
     } else {
         reasoning = reasoning_mode
     }
-    messages.push(json!({"role": "user", "content": &user_input}));
+    messages.push(json!({"role": "user", "content": user_input}));
     
     let func: serde_json::Value = fs::File::open("config/function_call.json")
         .ok()
         .and_then(|file| serde_json::from_reader(file).ok())
         .unwrap();
     //  发送并保存模型输出
-    let mut payload = json!({
+    let payload = json!({
         "model": model_name,
         "stream": stream,
         "thinking": {"type":reasoning},
@@ -241,6 +244,13 @@ pub async fn main(user_input: &str) -> Result<()> {
         "tool_choice":  "auto",
         "max_tokens": 4096
     });
+    return Ok((payload, messages, base_url.to_string(), api_key.to_string(), reasoning_mode.to_string(), stream));
+}
+
+pub async fn main(user_input: &str) -> Result<()> {
+    let (mut payload, mut messages, base_url, api_key, reasoning_mode, stream) = init(user_input)?;
+    let msg_file = "messages/messages.json";
+
     let client = Client::new();
     let url = format!("{}/chat/completions", base_url);
     loop {
@@ -264,7 +274,6 @@ pub async fn main(user_input: &str) -> Result<()> {
         if !stream {
             reply = response.json().await?;
         } else {
-            println!("{}", reasoning_mode);
             let mut processor = StreamProcessor::new();
             let mut stream = response.bytes_stream();
             while let Some(chunk) = stream.next().await {

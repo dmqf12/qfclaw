@@ -40,7 +40,7 @@ async fn retry(text: &str, msg: &Value) {
     let msg_id = msg["message"]["message_id"].as_u64().unwrap_or_default();
 
     if reply_msg_text.is_empty() {
-        clear_up(msg_id - 1, msg_id).await;
+        clear_up(msg_id - 1, msg_id, 0);
         let _ = fs::create_dir_all("messages");
         for (i, message) in messages.iter().enumerate().rev() {
             if let Some(role) = message["role"].as_str() {
@@ -64,10 +64,10 @@ async fn retry(text: &str, msg: &Value) {
                 if role == "user" {
                     let _ = serde_json::to_writer_pretty(file, &messages[..i]);
                     if text.len() > 6 {
-                        clear_up(reply_msg_id, msg_id - 1).await;
+                        clear_up(reply_msg_id, msg_id - 1, 0);
                         let _ = aichat::main(&text.replacen("/retry", "", 1).trim_start()).await;
                     } else {
-                        clear_up(reply_msg_id + 1, msg_id).await;
+                        clear_up(reply_msg_id + 1, msg_id, 0);
                         let _ = aichat::main(&msg_text).await;
                     }
                     return;
@@ -101,7 +101,8 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
     }
     if cmd_text == "/restart" {
         let (msg_id, _) = SendMessage::new("🔄重启中").send().await?;
-        clear_up(msg_id - 1, msg_id).await;
+        clear_up(msg_id - 1, msg_id, 0);
+        tokio::time::sleep(tokio::time::Duration::from_millis(10000)).await;
         match Command::new("bash").arg("qf").output() {
             Ok(_) => return Ok(true),
             Err(_) => return Ok(false),
@@ -123,11 +124,12 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         ))
         .send()
         .await?;
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        clear_up(msg_id - 1, msg_id).await;
+        clear_up(msg_id - 1, msg_id, 3);
     }
     if cmd_text == "/reasoning" {
-        let _msg_id = send_inline("请选择推理模式", json!([[{"text": "隐藏", "callback_data": "reasoning_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}], [{"text": "折叠", "callback_data": "reasoning_enabled"}]])).await;
+        let _msg_id = send_inline("是否显示推理过程", json!([
+            [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}], 
+            [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await;
     }
 
     if cmd_text == "/clear" {
@@ -139,7 +141,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         let last_session_id = session["last_session_start"].as_u64().unwrap_or(9999999);
         if last_session_id != 9999999 {
             Box::pin(exec_cmd("/mv_session clear", msg)).await?;
-            clear_up(last_session_id, message_id).await;
+            clear_up(last_session_id, message_id, 0);
         } else {
             SendMessage::new("🧹当前无session可清理").send().await?;
         }
