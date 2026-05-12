@@ -15,7 +15,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         let allow_list: [i64; 1] = [*ALLOW_ID];
         
         if !allow_list.contains(&chat_id) {
-            _ = SendMessage::new("❌您没有权限使用此机器人")
+            _ = SendMessage::new(&format!("不在白名单，您的id：\n      {}", chat_id))
                 .id(chat_id)
                 .send()
                 .await;

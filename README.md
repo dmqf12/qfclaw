@@ -21,6 +21,4 @@
 ```
 token：必填，从 BotFather 获得
 
-allow_id：允许使用该 Bot 的 Telegram 用户 ID
-
-暂时没写通过机器人获取chat_id，请自行获取
+allow_id：允许使用该 Bot 的 Telegram 用户 ID，给机器人发送任意消息获取

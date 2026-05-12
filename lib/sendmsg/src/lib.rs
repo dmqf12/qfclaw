@@ -47,8 +47,9 @@ pub static ALLOW_ID: Lazy<i64> = Lazy::new(|| {
         .ok()
         .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
         .and_then(|json| json["allow_id"].as_i64())
-        .expect("无法读取 config/bot.json 文件或找不到 'allow_id' 字段")
+        .unwrap_or(0)
 });
+
 
 fn get_callback_data(msg: &Value) -> (String, String, u64) {
     //  let chat_id = msg["callback_query"]["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_ID);
@@ -176,6 +177,9 @@ impl SendMessage {
             println!("无法发送空消息❎");
             return Ok((99999999, String::new()))
         }
+        if self.id == 0 {
+            return Ok((99999999, String::new()))
+        }
         let client = Client::new();
         let mut msg_id = 99999999;
         let mut msg_text = String::new();
@@ -239,6 +243,9 @@ pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
         let mut body = json!({"chat_id": *ALLOW_ID});
 
         for id in (start_id..=end_id).rev() {
+            if id > 9990000 {
+                break
+            }
             body["message_id"] = json!(id);
             for attempt in 0..2 {
                 match client
