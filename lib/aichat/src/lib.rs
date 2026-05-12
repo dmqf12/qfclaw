@@ -222,14 +222,17 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String, 
     let mut show_reasoning_mode = model_config["reasoning"]
         .as_str()
         .unwrap_or("enabled");
-    let mut reasoning = show_reasoning_mode;
+    let mut reasoning = "";
     if show_reasoning_mode.contains("draft") {
+        reasoning = show_reasoning_mode.split('_').last().unwrap();
         show_reasoning_mode = "draft";
-        reasoning = show_reasoning_mode.split('_').last();
     }
     if show_reasoning_mode.contains("fold") {
+        reasoning = show_reasoning_mode.split('_').last().unwrap();
         show_reasoning_mode = "fold";
-        reasoning = show_reasoning_mode.split('_').last();
+    }
+    if reasoning.is_empty() {
+        reasoning = show_reasoning_mode;
     }
     messages.push(json!({"role": "user", "content": user_input}));
     

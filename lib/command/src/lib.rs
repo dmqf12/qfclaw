@@ -124,12 +124,13 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         ))
         .send()
         .await?;
-        clear_up(msg_id - 1, msg_id, 3);
+        clear_up(msg_id - 1, msg_id, 5);
     }
     if cmd_text == "/reasoning" {
-        let _msg_id = send_inline("是否显示推理过程", json!([
+         let msg_id = send_inline("是否显示推理过程", json!([
             [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}], 
-            [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await;
+            [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await?;
+         clear_up(msg_id - 1, msg_id - 1, 0);
     }
 
     if cmd_text == "/clear" {
