@@ -29,16 +29,43 @@
     }
   },
   {
-    "type": "function",
+  "type": "function",
     "function": {
       "name": "exec",
-      "description": "执行命令",
+      "description": "执行命令。如果在指定时间内未完成，将返回当前输出并转入后台运行。",
       "parameters": {
         "type": "object",
         "properties": {
-          "command": { "type": "string", "description": "单个命令或者bash脚本" }
+          "command": { "type": "string", "description": "要执行的命令" },
+          "timeout": { 
+            "type": "integer", 
+            "description": "最大等待时长（秒），默认 10。超过此时间则返回 task_id 并转后台。",
+            "default": 10
+          }
         },
         "required": ["command"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "check_task",
+      "description": "管理或查看已启动任务的状态。可以获取实时标准输出/错误日志，或者强制终止正在运行的任务。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { 
+            "type": "string", 
+            "description": "exec 函数返回的任务唯一标识符。" 
+          },
+          "order": { 
+            "type": "string", 
+            "enum": ["check", "kill"],
+            "description": "操作类型：'check' 用于获取当前输出日志；'kill' 用于立即停止该任务。" 
+          }
+        },
+        "required": ["task_id", "order"]
       }
     }
   },
