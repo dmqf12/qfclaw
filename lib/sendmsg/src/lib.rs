@@ -233,12 +233,13 @@ impl SendMessage {
                     } else if p.to_string().contains("non-empty") {
                         break
                     } else {
-                        self.text = format!("❌消息发送失败！\ndescription: {}", &p.to_string());
+                        println!("{}", status);
+                        println!("{}", format!("❌消息发送失败！\ndescription: {}", &p.to_string()));
                     }
                 }
             } else {
                 if !self.draft.is_empty() {
-                    print!("ok...");
+                    println!("ok......");
                 } else {
                     println!("发送成功");
                 }
