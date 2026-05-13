@@ -1,6 +1,6 @@
 # Agent
 
-默认工作路径：`workspace/`
+默认工作目录是workspace，不需要cd或者加路径
 
 ## 目录结构
 
