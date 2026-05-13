@@ -9,27 +9,33 @@ use regex::Regex;
 
 
 
-fn escape_markdown_v2(text: &str) -> String {
-    let special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+fn escape_markdown_v2(cmd: &str) -> String {
+    let specials = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!', '\\', '$'];
     let mut escaped = String::new();
-    for c in text.chars() {
-        if special_chars.contains(&c) {
+    for c in cmd.chars() {
+        if specials.contains(&c) {
             escaped.push('\\');
         }
         escaped.push(c);
     }
     escaped
 }
-
 fn markdownv2_fold(text: &str) -> String {
-    let mut escape_text = escape_markdown_v2(text);
-    escape_text = Regex::new(r"\n{2,}")
-        .expect("无法编译正则表达式")
-        .replace_all(&escape_text, "\n")
+    // 1. 先压缩多余换行
+    let collapsed = Regex::new(r"\n{2,}")
+        .unwrap()
+        .replace_all(text, "\n")
         .to_string();
-    let fold_text = format!("**>{}||", &escape_text.replace("\n","\n>"));
+    
+    // 2. 转义特殊字符（注意：不转义换行符）
+    let escaped = escape_markdown_v2(&collapsed);
+    
+    // 3. 添加折叠标记（这些新加的 > 不需要转义，因为是格式控制字符）
+    let fold_text = format!("**>{}||", &escaped.replace("\n", "\n>"));
+    
     fold_text
 }
+
 
 pub fn print_json(value: &Value) {
     println!("{}", serde_json::to_string_pretty(value).unwrap())
@@ -107,7 +113,7 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
         clear_up(msg_id, msg_id, 0);
-        _ = SendMessage::new("✅操作成功").send().await;
+        _ = SendMessage::new("✅操作成功").clear().send().await;
         
     }
     Ok(true)
@@ -145,7 +151,8 @@ pub struct SendMessage {
     text: String,
     id: i64,
     parse_mode: String,
-    draft: String
+    draft: String,
+    do_clear: bool
 }
 
 impl SendMessage {
@@ -154,7 +161,8 @@ impl SendMessage {
             text: text.to_string(),
             id: *ALLOW_ID,
             parse_mode: String::from("Markdown"),
-            draft: String::from("")
+            draft: String::from(""),
+            do_clear: false
         }
     }
 
@@ -173,6 +181,10 @@ impl SendMessage {
     pub fn fold(mut self) -> Self {
         self.text = markdownv2_fold(&self.text);
         self.parse_mode = "MarkdownV2".to_string();
+        self
+    }
+    pub fn clear(mut self) -> Self {
+        self.do_clear = true;
         self
     }
     pub async fn send(mut self) -> Result<(u64, String)> {
@@ -223,6 +235,9 @@ impl SendMessage {
                 msg_id = status["result"]["message_id"]
                     .as_u64()
                     .unwrap_or_default();
+                if self.do_clear {
+                    clear_up(msg_id, msg_id, 0);
+                }
                 msg_text = status["result"]["text"]
                     .as_str()
                     .unwrap_or_default()

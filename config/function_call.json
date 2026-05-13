@@ -2,29 +2,16 @@
   {
     "type": "function",
     "function": {
-      "name": "read",
-      "description": "读取本地文件系统中的文件内容",
+      "name": "operate_file",
+      "description": "读取，写入或者删除本地文件系统中的文件",
       "parameters": {
         "type": "object",
         "properties": {
-          "file": { "type": "string", "description": "文件的绝对或相对路径" }
+          "file": { "type": "string", "description": "文件的绝对或相对路径" },
+          "content": { "type": "string", "description": "可选，要写入文件的内容，留空则创建空文件" },
+          "operation": { "type": "string", "description": "要进行的操作，write, read, delete" }
         },
-        "required": ["file"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "write",
-      "description": "向文件写入内容",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "file": { "type": "string", "description": "文件名，可包含绝对或相对路径" },
-          "text": { "type": "string", "description": "要写入文件的内容" }
-        },
-        "required": ["file", "text"]
+        "required": ["file", "operation"]
       }
     }
   },
@@ -50,7 +37,7 @@
   {
     "type": "function",
     "function": {
-      "name": "check_task",
+      "name": "operate_task",
       "description": "管理或查看已启动任务的状态。可以获取实时标准输出/错误日志，或者强制终止正在运行的任务。",
       "parameters": {
         "type": "object",
@@ -66,48 +53,6 @@
           }
         },
         "required": ["task_id", "order"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "delete",
-      "description": "删除文件",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "file": { "type": "string", "description": "要删除的文件名" }
-        },
-        "required": ["file"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "search",
-      "description": "通过duckduckgo搜索信息",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "text": { "type": "string", "description": "第一行是需要返回的条数，第二行是搜索关键词" }
-        },
-        "required": ["text"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "cex_info",
-      "description": "获取加密货币价格，以及用户的交易所余额，获取余额用balance表示，多个查询用空格隔开",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "text": { "type": "string", "description": "币种名" }
-        },
-        "required": ["text"]
       }
     }
   }

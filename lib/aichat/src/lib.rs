@@ -293,47 +293,40 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
     return Ok((payload, messages, base_url.to_string(), api_key.to_string(), show_reasoning_mode.to_string()));
 }
 
-/*
-fn 修改超时(tool_calls: &Value) -> Value {
-    let mut results = Vec::new();
-    if let Some(array) = tool_calls.as_array() {
-        for element in array {
-            let name = element["function"]["name"].as_str().unwrap_or_default();
-            let call_id = element["id"].as_str().unwrap_or_default();
-            let mut args: Value = serde_json::from_str(
-                element["function"]["arguments"].as_str().unwrap_or_default()
-                ).unwrap_or(json!({}));
-            if name == "exec" {
-                args["timeout"] = json!(1);
-            }
-            results.push(json!({"id": call_id, "type": "function", "function":{"name": name, "arguments": args.to_string()}}));
-            print_json(&json!(results));
-        }
-    }
-    return json!(results);
+fn 记录token(total_tokens: u64) -> Result<()> {
+    let session_file = "messages/session.json";
+    let mut session: Value = fs::File::open(session_file)
+        .ok()
+        .and_then(|file| serde_json::from_reader(file).ok())
+        .unwrap_or_default();
+    session["total_tokens"] = json!(total_tokens);
+    serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
+    Ok(())
 }
-*/
+fn 保存消息(messages: &Vec<Value>) -> Result<()> {
+    let msg_file = "messages/messages.json";
+    serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
+    fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+    Ok(())
+}
 
-fn 打断(tool_calls: &Value) -> Value {
-    let mut results = Vec::new();
-    if let Some(array) = tool_calls.as_array() {
-        for element in array {
-            let call_id = element["id"].as_str().unwrap_or_default();
-            results.push(json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": "用户打断",
-            }));
-        }
+
+fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
+    if let Some(obj) = messages.last_mut().and_then(|m| m.as_object_mut()) {
+        obj.remove("tool_calls");
     }
-    return json!(results);
+    messages
 }
+
+
+
+    
+
 
 pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
     let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(user_input)?;
-    let msg_file = "messages/messages.json";
 
-    // --- 修改点 1: 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
+    // --- 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
     let (tool_tx, tool_rx) = mpsc::channel::<ToolRequest>(32);
     tokio::spawn(toolcall(tool_rx)); // 后台任务持续运行，接收请求
 
@@ -347,38 +340,25 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
         };
 
         let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
-
-        let session_file = "messages/session.json";
-        let mut session: Value = fs::File::open(session_file)
-            .ok()
-            .and_then(|file| serde_json::from_reader(file).ok())
-            .unwrap_or_default();
-        session["total_tokens"] = total_tokens.into();
-        serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
+        记录token(total_tokens)?;
 
         if !content.is_empty() {
             let _ = SendMessage::new(&content).send().await;
         }
-        let mut have_new_msg = false;
-        let mut new_msg_content = String::new();
+
         if let Ok(new_msg) = rx.try_recv() {
-            println!("收到消息:   {}", new_msg);
-            have_new_msg = true;
-            new_msg_content = new_msg.clone();
+            messages = 截取消息(messages);
+            messages.push(json!({"role": "user", "content": new_msg}));
+            println!("打断❓");
+            payload["messages"] = Value::Array(messages.clone());
+            保存消息(&messages)?;
+            continue
         }
         if let Some(arr) = tool_calls.as_array() && !arr.is_empty() {
 
             messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning, "tool_calls": tool_calls}));
-            if have_new_msg {
-                messages.extend(打断(&tool_calls).as_array().unwrap().clone());
-                messages.push(json!({"role": "user", "content": new_msg_content}));
-                println!("打断❓");
-                payload["messages"] = Value::Array(messages.clone());
-                serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
-                fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
-                continue
-            }
-            // --- 修改点 2: 每次 tool_call 时创建一个 oneshot 通道用于接收反馈 ---
+
+            // --- 每次 tool_call 时创建一个 oneshot 通道用于接收反馈 ---
             let (tx_feedback, rx_feedback) = oneshot::channel::<Value>();
             
             let request = ToolRequest { 
@@ -401,13 +381,11 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
 
             messages.extend(tool_calls_result.as_array().unwrap().clone());
             payload["messages"] = Value::Array(messages.clone());
-            serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
-            fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+            保存消息(&messages)?;
 
         } else {
             messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning}));
-            serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
-            fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+            保存消息(&messages)?;
             break
         }
     }

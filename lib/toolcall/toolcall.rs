@@ -1,119 +1,15 @@
 use std::fs;
-use std::io::{BufRead, BufReader};
-// use std::io::Read;
-
-
-use reqwest::Client;
-use chrono::Utc;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use sha2::Sha256;
-use hmac::{KeyInit, Hmac, Mac};
+use tokio::process::{Command, Child};
+use tokio::sync::Mutex;
+use tokio::io::AsyncReadExt;
+use tokio::time::{timeout, Duration};
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::Arc;
+use serde_json::{json, Value};
+use uuid::Uuid;
 use tokio::sync::{oneshot};
 use sendmsg::*;
-
-
-async fn get_coin_price(coin: &str) -> String {
-    let price = String::new();
-    let coin = coin.to_uppercase();
-    // 尝试 OKX
-    let url = format!("https://www.okx.com/api/v5/public/mark-price?instId={}-USDT-SWAP", coin);
-    if let Ok(resp) = reqwest::get(&url).await {
-        if let Ok(result) = resp.json::<Value>().await {
-            //  println!("{}", result);
-            return result["data"][0]["markPx"]
-                .as_str()
-                .unwrap_or("")
-                .to_string()
-        }
-    }
-    // 尝试 MEXC Contract
-    let url = format!("https://contract.mexc.com/api/v1/contract/ticker?symbol={}_USDT", coin);
-    if let Ok(resp) =  reqwest::get(&url).await {
-        if let Ok(result) = resp.json::<Value>().await {
-            //  println!("{}", result);
-            return result["data"]["lastPrice"]
-                .as_f64()
-                .unwrap_or_default()
-                .to_string()
-        }
-    }
-    price
-}
-
-
-async fn get_balance() -> f64 {
-    // 读取 .data 文件中的前三行
-    let file = match fs::File::open(".data") {
-        Ok(f) => f,
-        Err(_) => return 0.0,
-    };
-    let lines: Vec<String> = BufReader::new(file)
-        .lines()
-        .take(3)
-        .filter_map(Result::ok)
-        .map(|s| s.trim().to_string())
-        .collect();
-    if lines.len() < 3 {
-        return 0.0;
-    }
-    let api_key = &lines[0];
-    let secret_key = &lines[1];
-    let passphrase = &lines[2];
-
-    let path = "/api/v5/account/balance";
-    let params = "?ccy=USDT";
-    let url = format!("https://okx.dmqf.me{}{}", path, params);
-
-    // 生成时间戳 (UTC, 毫秒)
-    let now = Utc::now();
-    let timestamp = format!("{}.{:03}Z", now.format("%Y-%m-%dT%H:%M:%S"), now.timestamp_subsec_millis());
-
-    // 构造签名消息
-    let message = format!("{}{}{}{}", timestamp, "GET", path, params);
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret_key.as_bytes()).unwrap();
-    mac.update(message.as_bytes());
-    let signature = BASE64.encode(mac.finalize().into_bytes());
-
-    let client = Client::new();
-    let response = client
-        .get(&url)
-        .header("OK-ACCESS-KEY", api_key)
-        .header("OK-ACCESS-PASSPHRASE", passphrase)
-        .header("OK-ACCESS-TIMESTAMP", timestamp)
-        .header("OK-ACCESS-SIGN", signature)
-        .send()
-        .await;
-    match response {
-        Ok(resp) => {
-            if let Ok(json) = resp.json::<Value>().await {
-                if let Some(total_eq) = json["data"][0]["totalEq"].as_str() {
-                    return total_eq.parse::<f64>().unwrap_or(0.0).mul_add(1000.0, 0.5).floor() / 1000.0;
-                }
-            }
-            0.0
-        }
-        Err(_) => 0.0,
-    }
-}
-
-async fn cex_info(text: &str) -> String {
-    let mut result = String::new();
-    for part in text.split_whitespace() {
-        if part == "balance" {
-            result = format!("{}\n{}: {}", result, part, get_balance().await.to_string() + " USD");
-        } else {
-            let price = get_coin_price(part).await;
-            if !price.is_empty(){
-                result = format!("{}\n{}: {}", result, part, price);
-            } else {
-                result = format!("{}\n{}: 未获取到价格", result, part);
-            }
-        }
-    }
-    result
-
-}
 
 async fn read(file: &str) -> String {
     println!("🔧读取：{}", file);
@@ -163,77 +59,20 @@ async fn delete(file: &str) -> String {
     }
 }
 
-fn split_input(input: &str) -> (i32, &str) {
-    let mut lines = input.lines().filter(|l| !l.is_empty());
-    match (lines.next(), lines.next()) {
-        (Some(num), Some(text)) => (num.parse().unwrap_or(5), text),
-        (Some(text), None) => (5, text),
-        _ => (5, ""),
-    }
-}
 
 
-async fn just_exec(text: &str) -> String {
-    let result = match Command::new("bash")
-        .arg("-c")
-        .arg(format!("cd workspace\n{}", text))
-        .output()
-        .await   // 必须 .await
-    {
-        Ok(r) => r,
-        Err(_) => return "执行失败".to_string(),
-    };
-    let mut output = String::from_utf8_lossy(&result.stdout).to_string();
-    let error = String::from_utf8_lossy(&result.stderr).to_string();
-    if !error.is_empty() {
-        output = format!("{}错误信息：\n{}", output, error);
-    }
-    output
-}
-
-
-async fn search(text: &str) -> String {
-    let (num, content) = split_input(text);
-    println!("🔍搜索：{} {}条", content, num);
-    let _ = SendMessage::new(&format!("🔍搜索：{} {}条", content, num)).parse("").send().await;
-    let result = just_exec(&format!("python3 skill/search.py \"{}\" {}", content, num)).await;
-    result
-}
-
-
-async fn tool_run(tool_name: &str, parame: &Value) -> String {
-    if tool_name == "read" {
-        let file = parame["file"]
-            .as_str()
-            .unwrap_or("");
-        return read(file).await
-    }
-    if tool_name == "write" {
-        let file = parame["file"]
-            .as_str()
-            .unwrap_or("");
-        let text = parame["text"]
-            .as_str()
-            .unwrap_or("");
+async fn operate_file(parame: &Value) -> String {
+    let file = parame["file"].as_str().unwrap_or("");
+    let operation = parame["operation"].as_str().unwrap_or("");
+    if operation == "write" {
+        let text = parame["content"].as_str().unwrap_or("");
         return write(file, text).await
     }
-    if tool_name == "delete" {
-        let file = parame["file"]
-            .as_str()
-            .unwrap_or("");
+    if operation == "delete" {
         return delete(file).await
     }
-    if tool_name == "search" {
-        let text = parame["text"]
-            .as_str()
-            .unwrap_or("");
-        return search(text).await
-    }
-    if tool_name == "cex_info" {
-        let text = parame["text"]
-            .as_str()
-            .unwrap_or("");
-        return cex_info(text).await
+    if operation == "read" {
+        return read(file).await
     }
     String::new()
 }
@@ -243,18 +82,6 @@ pub struct ToolRequest {
     pub payload: Value,
     pub resp_tx: oneshot::Sender<Value>,
 }
-
-use tokio::process::{Command, Child};
-use tokio::sync::Mutex;
-use tokio::io::AsyncReadExt;
-use tokio::time::{timeout, Duration};
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::sync::Arc;
-use serde_json::{json, Value};
-use uuid::Uuid;
-
-// --- 结构定义 ---
 
 struct TaskHandle {
     child: Child,
@@ -266,9 +93,13 @@ lazy_static::lazy_static! {
 }
 
 
-async fn notify(msg: &str) {
+async fn notify(msg: &str, clear: bool) {
     println!("{}", msg);
-    let _ = SendMessage::new(msg).fold().send().await;
+    if let Ok((msg_id, _)) = SendMessage::new(msg).fold().send().await {
+        if clear {
+            clear_up(msg_id, msg_id, 0);
+        }
+    }
 }
 
 // --- 核心业务逻辑 ---
@@ -277,7 +108,7 @@ async fn exec(params: Value) -> String {
     let cmd_text = params["command"].as_str().unwrap_or("");
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
-    notify(&format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs)).await;
+    notify(&format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs), false).await;
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(format!("cd workspace && {}", cmd_text))
@@ -306,7 +137,7 @@ async fn exec(params: Value) -> String {
         Ok(status) => {
             let log = output_buf.lock().await.clone();
             let code = status.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
-            format!("✅ 任务立即完成 (Code {}):\n{}", code, log)
+            format!("✅ 任务完成 (Code {}):\n{}", code, log)
         }
         Err(_) => {
             TASKS.lock().await.insert(
@@ -315,17 +146,16 @@ async fn exec(params: Value) -> String {
             );
             let current_log = output_buf.lock().await.clone();
             let msg = format!("⏳ 任务超时转入后台，ID: {}", task_id);
-            notify(&msg).await;
+            notify(&msg, true).await;
             format!("{}\n当前输出:\n{}", msg, current_log)
         }
     }
 }
 
-async fn check_task(params: Value) -> String {
+async fn operate_task(params: Value) -> String {
     let task_id = params["task_id"].as_str().unwrap_or("");
     let order = params["order"].as_str().unwrap_or("check");
-    println!("👌🏻查询：{}", task_id);
-    let _ = SendMessage::new(&format!("👌🏻查询：{}", task_id)).fold().send().await;
+    notify(&format!("👌🏻查询：{}", task_id), true).await;
     let mut tasks = TASKS.lock().await;
     let task = match tasks.get_mut(task_id) {
         Some(t) => t,
@@ -337,7 +167,7 @@ async fn check_task(params: Value) -> String {
             let _ = task.child.kill().await;
             tasks.remove(task_id);
             let msg = format!("🛑 终止任务：{}", task_id);
-            notify(&msg).await;
+            notify(&msg, true).await;
             msg
         }
         "check" => {
@@ -363,8 +193,8 @@ pub async fn toolcall(mut rx: tokio::sync::mpsc::Receiver<ToolRequest>) {
 
                 let run_result = match name {
                     "exec" => exec(args).await,
-                    "check_task" => check_task(args).await,
-                    _ => tool_run(name, &args).await,
+                    "operate_task" => operate_task(args).await,
+                    _ => operate_file(&args).await,
                 };
 
                 results.push(json!({
