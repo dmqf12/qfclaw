@@ -206,6 +206,17 @@ async fn chat(api_key: &str, base_url: &str, payload: &Value, show_reasoning_mod
     }
 }
 
+
+fn build_system_prompt() -> String {
+    let files = ["SKILL.md", "SOUL.md", "Agent.md"];
+    files
+        .iter()
+        .filter_map(|f| fs::read_to_string(f).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+
 fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)> {
     println!("{}", user_input);
     if user_input.is_empty() {
@@ -220,7 +231,7 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
         .and_then(|file| serde_json::from_reader(file).ok())
         .unwrap_or_else(|| vec![]);
 
-    let system_prompt = fs::read_to_string("workspace/SOUL.md")?;
+    let system_prompt = build_system_prompt();
     messages.insert(0, json!({"role": "system", "content": &system_prompt}));
 
     //  获取模型配置信息
