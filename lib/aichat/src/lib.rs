@@ -207,15 +207,16 @@ async fn chat(api_key: &str, base_url: &str, payload: &Value, show_reasoning_mod
 }
 
 
+
 fn build_system_prompt() -> String {
+    let path = "workspace";
     let files = ["SKILL.md", "SOUL.md", "Agent.md"];
     files
         .iter()
-        .filter_map(|f| fs::read_to_string(f).ok())
+        .filter_map(|f| fs::read_to_string(format!("{}/{}", path, f)).ok())
         .collect::<Vec<_>>()
         .join("\n")
 }
-
 
 fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)> {
     println!("{}", user_input);
