@@ -83,7 +83,8 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
     let timeout = 60;
     loop {
         let url = format!(
-            "https://api.telegram.org/bot{}/getUpdates?limit=1&offset={}&timeout={}",
+            "{}{}/getUpdates?limit=1&offset={}&timeout={}",
+            *BOT_BASE_URL,
             *BOT_TOKEN, last_update_id, timeout
         );
         match client.get(&url).timeout(Duration::from_secs(65)).send().await {

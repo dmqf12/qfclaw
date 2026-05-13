@@ -101,12 +101,12 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         if text.contains("set") {
             if text.contains("draft") {
                 clear_up(msg_id, msg_id, 0);
-                _ = send_inline("请选择推理模型", json!([
+                _ = send_inline("请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_draft_enabled"}, {"text": "适应", "callback_data": "reasoning_draft_adaptive"}] ])).await;
             }
             if text.contains("fold") {
                 clear_up(msg_id, msg_id, 0);
-                _ = send_inline("请选择推理模型", json!([
+                _ = send_inline("请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
             }
             return Ok(true)
