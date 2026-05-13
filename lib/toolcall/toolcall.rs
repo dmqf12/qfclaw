@@ -88,6 +88,7 @@ async fn exec(params: Value) -> String {
     // 1. 发送初始消息并获取 msg_id
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
     let (msg_id, _) = SendMessage::new(&start_msg).fold().send().await.unwrap_or_default();
+    println!("{}", start_msg);
 
     let mut child = Command::new("bash")
         .arg("-c")

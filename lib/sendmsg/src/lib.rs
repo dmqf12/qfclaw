@@ -237,7 +237,11 @@ impl SendMessage {
                     }
                 }
             } else {
-                println!("ok: true, result: true");
+                if !self.draft.is_empty() {
+                    print!("ok...");
+                } else {
+                    println!("发送成功");
+                }
                 msg_id = status["result"]["message_id"]
                     .as_u64()
                     .unwrap_or_default();
