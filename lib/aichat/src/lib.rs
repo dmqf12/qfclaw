@@ -385,6 +385,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
 
         } else {
             messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning}));
+            payload["messages"] = Value::Array(messages.clone());
             保存消息(&messages)?;
             break
         }
