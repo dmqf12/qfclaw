@@ -80,13 +80,13 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
 async fn getupdates_receive(tx: mpsc::Sender<Value>) {
     let client = reqwest::Client::new();
     let mut last_update_id = 1;
-    let timeout = 30;
+    let timeout = 60;
     loop {
         let url = format!(
             "https://api.telegram.org/bot{}/getUpdates?limit=1&offset={}&timeout={}",
             *BOT_TOKEN, last_update_id, timeout
         );
-        match client.get(&url).timeout(Duration::from_secs(35)).send().await {
+        match client.get(&url).timeout(Duration::from_secs(65)).send().await {
             Ok(response) => match response.json::<Value>().await {
                 Ok(json_response) => {
                     if let Some(results) = json_response["result"].as_array() {
