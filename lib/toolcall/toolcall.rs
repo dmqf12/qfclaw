@@ -132,7 +132,7 @@ async fn exec(params: Value) -> String {
     };
 
     // 3. 任务结束（完成或转入后台）时清理消息
-    clear_up(msg_id, msg_id, 0);
+    clear_up(msg_id, msg_id, 3);
 
     res_text
 }
