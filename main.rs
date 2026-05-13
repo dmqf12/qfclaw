@@ -104,7 +104,7 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
                 }
                 Err(e) => eprintln!("JSON parse error: {}", e),
             },
-            Err(e) => eprintln!("Request error: {}", e),
+            Err(e) => println!("Request error: {}", e.to_string()),
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

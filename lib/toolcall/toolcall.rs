@@ -12,8 +12,7 @@ use tokio::sync::{oneshot};
 use sendmsg::*;
 
 async fn read(file: &str) -> String {
-    println!("🔧读取：{}", file);
-    let _ = SendMessage::new(&format!("🔧读取：{}", file)).parse("").send().await;
+    notify(&format!("🔧读取：{}", file), true).await;
 
 
     let path = if file.starts_with('/') {
@@ -29,8 +28,7 @@ async fn read(file: &str) -> String {
 }
 
 async fn write(file: &str, text: &str) -> String {
-    println!("✏️写入：{}", file);
-    let _ = SendMessage::new(&format!("✏️写入：{}", file)).parse("").send().await;
+    notify(&format!("✏️写入：{}", file), true).await;
     let path = if file.starts_with('/') || file.starts_with('$') {
         file.to_string()
     } else {
@@ -45,8 +43,7 @@ async fn write(file: &str, text: &str) -> String {
 
 
 async fn delete(file: &str) -> String {
-    println!("🗑️删除：{}", file);
-    let _ = SendMessage::new(&format!("🗑️删除：{}", file)).parse("").send().await;
+    notify(&format!("🗑️删除：{}", file), true).await;
     let path = if file.starts_with('/') {
         file.to_string()
     } else {
@@ -97,7 +94,7 @@ async fn notify(msg: &str, clear: bool) {
     println!("{}", msg);
     if let Ok((msg_id, _)) = SendMessage::new(msg).fold().send().await {
         if clear {
-            clear_up(msg_id, msg_id, 0);
+            clear_up(msg_id, msg_id, 5);
         }
     }
 }
@@ -108,7 +105,7 @@ async fn exec(params: Value) -> String {
     let cmd_text = params["command"].as_str().unwrap_or("");
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
-    notify(&format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs), false).await;
+    notify(&format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs), true).await;
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(format!("cd workspace && {}", cmd_text))

@@ -319,10 +319,6 @@ fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
 }
 
 
-
-    
-
-
 pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
     let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(user_input)?;
 
