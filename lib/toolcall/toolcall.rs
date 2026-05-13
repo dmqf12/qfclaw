@@ -79,13 +79,16 @@ async fn notify(msg: &str, clear: bool) {
     }
 }
 
-// --- 核心业务逻辑 ---
 
 async fn exec(params: Value) -> String {
     let cmd_text = params["command"].as_str().unwrap_or("");
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
-    notify(&format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs), true).await;
+
+    // 1. 发送初始消息并获取 msg_id
+    let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
+    let (msg_id, _) = SendMessage::new(&start_msg).fold().send().await.unwrap_or_default();
+
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(cmd_text)
@@ -99,7 +102,6 @@ async fn exec(params: Value) -> String {
     let output_buf = Arc::new(Mutex::new(String::new()));
     let output_clone = output_buf.clone();
 
-    // 1. 实时读取输出
     tokio::spawn(async move {
         let mut reader = stdout.chain(stderr);
         let mut buffer = [0; 1024];
@@ -109,8 +111,8 @@ async fn exec(params: Value) -> String {
         }
     });
 
-    // 2. 等待策略
-    match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
+    // 2. 执行等待逻辑
+    let res_text = match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
         Ok(status) => {
             let log = output_buf.lock().await.clone();
             let code = status.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
@@ -126,8 +128,14 @@ async fn exec(params: Value) -> String {
             notify(&msg, true).await;
             format!("{}\n当前输出:\n{}", msg, current_log)
         }
-    }
+    };
+
+    // 3. 任务结束（完成或转入后台）时清理消息
+    clear_up(msg_id, msg_id, 0);
+
+    res_text
 }
+
 
 async fn operate_task(params: Value) -> String {
     let task_id = params["task_id"].as_str().unwrap_or("");
