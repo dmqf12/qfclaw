@@ -13,7 +13,7 @@ use sendmsg::*;
 
 async fn read(file: &str) -> String {
     notify(&format!("🔧读取：{}", file), true).await;
-    match fs::read_to_string(&path) {
+    match fs::read_to_string(file) {
         Ok(s) => s.trim().to_string(),
         Err(e) => format!("无法读取文件 {}: {}", file, e),
     }
@@ -21,7 +21,7 @@ async fn read(file: &str) -> String {
 
 async fn write(file: &str, text: &str) -> String {
     notify(&format!("✏️写入：{}", file), true).await;
-    match fs::write(&path, text) {
+    match fs::write(file, text) {
         Ok(_) => format!("写入成功: {}", file),
         Err(e) => format!("写入失败 {}: {}", file, e),
     }
@@ -30,7 +30,7 @@ async fn write(file: &str, text: &str) -> String {
 
 async fn delete(file: &str) -> String {
     notify(&format!("🗑️删除：{}", file), true).await;
-    match fs::remove_file(&path) {
+    match fs::remove_file(file) {
         Ok(_) => format!("✅删除成功: {}", file),
         Err(e) => format!("❌删除失败 {}: {}", file, e),
     }
