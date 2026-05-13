@@ -13,14 +13,6 @@ use sendmsg::*;
 
 async fn read(file: &str) -> String {
     notify(&format!("🔧读取：{}", file), true).await;
-
-
-    let path = if file.starts_with('/') {
-        file.to_string()
-    } else {
-        format!("workspace/{}", file)
-    };
-
     match fs::read_to_string(&path) {
         Ok(s) => s.trim().to_string(),
         Err(e) => format!("无法读取文件 {}: {}", file, e),
@@ -29,12 +21,6 @@ async fn read(file: &str) -> String {
 
 async fn write(file: &str, text: &str) -> String {
     notify(&format!("✏️写入：{}", file), true).await;
-    let path = if file.starts_with('/') || file.starts_with('$') {
-        file.to_string()
-    } else {
-        format!("workspace/{}", file)
-    };
-
     match fs::write(&path, text) {
         Ok(_) => format!("写入成功: {}", file),
         Err(e) => format!("写入失败 {}: {}", file, e),
@@ -44,12 +30,6 @@ async fn write(file: &str, text: &str) -> String {
 
 async fn delete(file: &str) -> String {
     notify(&format!("🗑️删除：{}", file), true).await;
-    let path = if file.starts_with('/') {
-        file.to_string()
-    } else {
-        format!("workspace/{}", file)
-    };
-
     match fs::remove_file(&path) {
         Ok(_) => format!("✅删除成功: {}", file),
         Err(e) => format!("❌删除失败 {}: {}", file, e),
@@ -108,7 +88,7 @@ async fn exec(params: Value) -> String {
     notify(&format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs), true).await;
     let mut child = Command::new("bash")
         .arg("-c")
-        .arg(format!("cd workspace && {}", cmd_text))
+        .arg(cmd_text)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
