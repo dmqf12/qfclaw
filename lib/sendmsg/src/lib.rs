@@ -222,20 +222,18 @@ impl SendMessage {
             let status: Value = result.json().await?;
             let status_ok = status["ok"].as_bool().unwrap_or(false);
             if !status_ok {
-                println!("{}", status);
-                println!("重新发送❌❌");
                 if let Some(p) = status.get("description") {
                     if p.to_string().contains("parse") {
                         self.parse_mode = "".to_string();
-                        //self.text = format!("{}\nMarkdown解析失败\n{}", self.text, p.to_string());
                         if !self.draft.is_empty() {
                             break
                         }
+                        println!("{}", status);
+                        println!("重新发送❌❌");
                     } else if p.to_string().contains("non-empty") {
                         break
                     } else {
                         self.text = format!("❌消息发送失败！\ndescription: {}", &p.to_string());
-                        break
                     }
                 }
             } else {

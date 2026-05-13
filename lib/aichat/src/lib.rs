@@ -67,7 +67,7 @@ impl StreamProcessor {
         // 3. 处理 reasoning
         if let Some(reasoning) = delta["reasoning_content"].as_str() {
             self.full_reasoning.push_str(reasoning);
-            if !self.start_response && self.full_reasoning.len() % 64 == 0 {
+            if !self.start_response && self.full_reasoning.len() % 8 == 0 {
                 self.send_draft(&format!("Reasoning 🧠\n{}", self.full_reasoning)).await;
             }
         }
@@ -79,7 +79,7 @@ impl StreamProcessor {
                 self.flush_reasoning().await;
             }
             self.full_response.push_str(content);
-            if self.full_response.len() % 64 == 0 {
+            if self.full_response.len() % 8 == 0 {
                 self.send_draft(&self.full_response).await;
             }
         }
