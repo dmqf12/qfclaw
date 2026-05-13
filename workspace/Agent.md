@@ -1,6 +1,7 @@
 # Agent
 
-默认工作目录是workspace
+工作目录是workspace/
+运行命令需要先进入workspace/目录
 所有工作都在这个目录下完成
 
 ## 目录结构
