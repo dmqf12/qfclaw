@@ -68,7 +68,7 @@ impl StreamProcessor {
         if let Some(reasoning) = delta["reasoning_content"].as_str() {
             self.full_reasoning.push_str(reasoning);
             if !self.start_response && self.full_reasoning.len() % 8 == 0 {
-                self.send_draft(&format!("Reasoning 🧠\n{}", self.full_reasoning)).await;
+                tokio::spawn(SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning)).is_draft().send());
             }
         }
 
@@ -80,7 +80,7 @@ impl StreamProcessor {
             }
             self.full_response.push_str(content);
             if self.full_response.len() % 8 == 0 {
-                self.send_draft(&self.full_response).await;
+                tokio::spawn(SendMessage::new(&self.full_response).is_draft().send());
             }
         }
 
@@ -139,9 +139,6 @@ impl StreamProcessor {
         }
     }
 
-    async fn send_draft(&self, text: &str) {
-        _ = SendMessage::new(&text).is_draft().send().await;
-    }
 }
 
 
@@ -210,7 +207,7 @@ async fn chat(api_key: &str, base_url: &str, payload: &Value, show_reasoning_mod
 
 fn build_system_prompt() -> String {
     let path = "workspace";
-    let files = ["SKILL.md", "SOUL.md", "Agent.md"];
+    let files = ["SOUL.md", "Agent.md", "SKILL.md"];
     files
         .iter()
         .filter_map(|f| fs::read_to_string(format!("{}/{}", path, f)).ok())
