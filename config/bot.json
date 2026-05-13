@@ -1,4 +1,5 @@
 {   
     "token": "",
-    "allow_id": 0
+    "allow_id": 0,
+    "base_url": "https://api.telegram.org/bot"
 }

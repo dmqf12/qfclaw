@@ -58,6 +58,14 @@ pub static ALLOW_ID: Lazy<i64> = Lazy::new(|| {
         .unwrap_or(0)
 });
 
+pub static BOT_BASE_URL: Lazy<String> = Lazy::new(|| {
+    fs::read_to_string("config/bot.json")
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|json| json["base_url"].as_str().map(String::from))
+        .unwrap_or("https://api.telegram.org/bot".to_string())
+});
+
 
 
 fn get_callback_data(msg: &Value) -> (String, String, u64) {
@@ -78,7 +86,7 @@ fn get_callback_data(msg: &Value) -> (String, String, u64) {
 
 async fn reply_callback(callback_id: &str) {
     let client = Client::new();
-    let url = &format!("https://api.telegram.org/bot{}/answerCallbackQuery", *BOT_TOKEN);
+    let url = &format!("{}{}/answerCallbackQuery", *BOT_BASE_URL, *BOT_TOKEN);
     let body = json!({ "callback_query_id": callback_id});
     //    , "text": "操作成功", "show_alert": false});
     if let Ok(result) = client.post(url).json(&body).send().await {
@@ -127,7 +135,7 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
         "text": text,
         "reply_markup": { "inline_keyboard": inline_keyboard } });
     for _i in 1..3 {
-        let result = client.post(&format!("https://api.telegram.org/bot{}/sendMessage", *BOT_TOKEN))
+        let result = client.post(&format!("{}{}/sendMessage", *BOT_BASE_URL, *BOT_TOKEN))
             .json(&body)
             .send()
             .await?;
@@ -207,7 +215,7 @@ impl SendMessage {
             if !self.draft.is_empty() {
                 body["draft_id"] = json!(1)
             }
-            let result = client.post(&format!("https://api.telegram.org/bot{}/sendMessage{}", *BOT_TOKEN, self.draft))
+            let result = client.post(&format!("{}{}/sendMessage{}", *BOT_BASE_URL, *BOT_TOKEN, self.draft))
                 .json(&body)
                 .send()
                 .await?;
@@ -268,7 +276,8 @@ pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
             for attempt in 0..2 {
                 match client
                     .post(&format!(
-                        "https://api.telegram.org/bot{}/deleteMessage",
+                        "{}{}/deleteMessage",
+                        *BOT_BASE_URL,
                         *BOT_TOKEN
                     ))
                     .json(&body)
