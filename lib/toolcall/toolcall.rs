@@ -120,8 +120,8 @@ async fn exec(params: Value) -> String {
         .spawn()
         .expect("Failed to spawn");
 
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
 
     let output_buf = Arc::new(Mutex::new(String::new()));
     let output_clone = output_buf.clone();
