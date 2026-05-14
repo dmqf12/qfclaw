@@ -1,16 +1,17 @@
 use std::fs;
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
-use reqwest::Client;
-use serde_json::{json, Value};
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use regex::Regex;
-
-
+use reqwest::Client;
+use serde_json::{Value, json};
 
 fn escape_markdown_v2(cmd: &str) -> String {
-    let specials = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!', '\\', '$'];
+    let specials = [
+        '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!',
+        '\\', '$',
+    ];
     let mut escaped = String::new();
     for c in cmd.chars() {
         if specials.contains(&c) {
@@ -26,21 +27,19 @@ fn markdownv2_fold(text: &str) -> String {
         .unwrap()
         .replace_all(text, "\n")
         .to_string();
-    
+
     // 2. 转义特殊字符（注意：不转义换行符）
     let escaped = escape_markdown_v2(&collapsed);
-    
+
     // 3. 添加折叠标记（这些新加的 > 不需要转义，因为是格式控制字符）
     let fold_text = format!("**>{}||", &escaped.replace("\n", "\n>"));
-    
+
     fold_text
 }
-
 
 pub fn print_json(value: &Value) {
     println!("{}", serde_json::to_string_pretty(value).unwrap())
 }
-
 
 pub static BOT_TOKEN: Lazy<String> = Lazy::new(|| {
     fs::read_to_string("config/bot.json")
@@ -66,16 +65,10 @@ pub static BOT_BASE_URL: Lazy<String> = Lazy::new(|| {
         .unwrap_or("https://api.telegram.org/bot".to_string())
 });
 
-
-
 fn get_callback_data(msg: &Value) -> (String, String, u64) {
     //  let chat_id = msg["callback_query"]["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_ID);
-    let data = msg["callback_query"]["data"]
-        .as_str()
-        .unwrap_or_default();
-    let callback_id = msg["callback_query"]["id"]
-        .as_str()
-        .unwrap_or_default();
+    let data = msg["callback_query"]["data"].as_str().unwrap_or_default();
+    let callback_id = msg["callback_query"]["id"].as_str().unwrap_or_default();
     let msg_id = msg["callback_query"]["message"]["message_id"]
         .as_u64()
         .unwrap_or(9999999);
@@ -83,16 +76,16 @@ fn get_callback_data(msg: &Value) -> (String, String, u64) {
     (callback_id.to_string(), data.to_string(), msg_id)
 }
 
-
 async fn reply_callback(callback_id: &str) {
     let client = Client::new();
     let url = &format!("{}{}/answerCallbackQuery", *BOT_BASE_URL, *BOT_TOKEN);
     let body = json!({ "callback_query_id": callback_id});
     //    , "text": "操作成功", "show_alert": false});
-    if let Ok(result) = client.post(url).json(&body).send().await {
-         if let Ok(status) = result.json().await {
+    if let Ok(_) = client.post(url).json(&body).send().await {
+        /*if let Ok(status) = result.json().await {
             print_json(&status);
-        }
+        }  */
+        return;
     }
 }
 pub async fn deal_callback(msg: &Value) -> Result<bool> {
@@ -109,7 +102,7 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
                 _ = send_inline("请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
             }
-            return Ok(true)
+            return Ok(true);
         }
         let models_file = "config/models.json";
         let mut models = fs::File::open(models_file)
@@ -122,7 +115,6 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         reply_callback(&callback_id).await;
         clear_up(msg_id, msg_id, 0);
         _ = SendMessage::new("✅操作成功").clear().send().await;
-        
     }
     Ok(true)
 }
@@ -135,7 +127,8 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
         "text": text,
         "reply_markup": { "inline_keyboard": inline_keyboard } });
     for _i in 1..3 {
-        let result = client.post(&format!("{}{}/sendMessage", *BOT_BASE_URL, *BOT_TOKEN))
+        let result = client
+            .post(&format!("{}{}/sendMessage", *BOT_BASE_URL, *BOT_TOKEN))
             .json(&body)
             .send()
             .await?;
@@ -146,10 +139,8 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
             println!("重新发送❌❌");
         } else {
             println!("ok: true, result: true");
-            msg_id = status["result"]["message_id"]
-                .as_u64()
-                .unwrap_or_default();
-            break
+            msg_id = status["result"]["message_id"].as_u64().unwrap_or_default();
+            break;
         }
     }
     Ok(msg_id)
@@ -160,7 +151,7 @@ pub struct SendMessage {
     id: i64,
     parse_mode: String,
     draft: String,
-    do_clear: bool
+    do_clear: bool,
 }
 
 impl SendMessage {
@@ -170,7 +161,7 @@ impl SendMessage {
             id: *ALLOW_ID,
             parse_mode: String::from("Markdown"),
             draft: String::from(""),
-            do_clear: false
+            do_clear: false,
         }
     }
 
@@ -198,24 +189,28 @@ impl SendMessage {
     pub async fn send(mut self) -> Result<(u64, String)> {
         if self.text.is_empty() {
             println!("无法发送空消息❎");
-            return Ok((99999999, String::new()))
+            return Ok((99999999, String::new()));
         }
         if self.id == 0 {
-            return Ok((99999999, String::new()))
+            return Ok((99999999, String::new()));
         }
         let client = Client::new();
         let mut msg_id = 99999999;
         let mut msg_text = String::new();
         for _i in 1..3 {
             let mut body = json!({
-                "chat_id": self.id,
-                "text": self.text,
-                "parse_mode": self.parse_mode
-                });
+            "chat_id": self.id,
+            "text": self.text,
+            "parse_mode": self.parse_mode
+            });
             if !self.draft.is_empty() {
                 body["draft_id"] = json!(1)
             }
-            let result = client.post(&format!("{}{}/sendMessage{}", *BOT_BASE_URL, *BOT_TOKEN, self.draft))
+            let result = client
+                .post(&format!(
+                    "{}{}/sendMessage{}",
+                    *BOT_BASE_URL, *BOT_TOKEN, self.draft
+                ))
                 .json(&body)
                 .send()
                 .await?;
@@ -226,15 +221,18 @@ impl SendMessage {
                     if p.to_string().contains("parse") {
                         self.parse_mode = "".to_string();
                         if !self.draft.is_empty() {
-                            break
+                            break;
                         }
                         println!("{}", status);
                         println!("重新发送❌❌");
                     } else if p.to_string().contains("non-empty") {
-                        break
+                        break;
                     } else {
                         println!("{}", status);
-                        println!("{}", format!("❌消息发送失败！\ndescription: {}", &p.to_string()));
+                        println!(
+                            "{}",
+                            format!("❌消息发送失败！\ndescription: {}", &p.to_string())
+                        );
                     }
                 }
             } else {
@@ -243,9 +241,7 @@ impl SendMessage {
                 } else {
                     println!("发送成功");
                 }
-                msg_id = status["result"]["message_id"]
-                    .as_u64()
-                    .unwrap_or_default();
+                msg_id = status["result"]["message_id"].as_u64().unwrap_or_default();
                 if self.do_clear {
                     clear_up(msg_id, msg_id, 0);
                 }
@@ -253,15 +249,12 @@ impl SendMessage {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                break
+                break;
             }
         }
         return Ok((msg_id, msg_text));
     }
 }
-
-
-
 
 pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
     tokio::spawn(async move {
@@ -273,16 +266,12 @@ pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
 
         for id in (start_id..=end_id).rev() {
             if id > 9990000 {
-                break
+                break;
             }
             body["message_id"] = json!(id);
             for attempt in 0..2 {
                 match client
-                    .post(&format!(
-                        "{}{}/deleteMessage",
-                        *BOT_BASE_URL,
-                        *BOT_TOKEN
-                    ))
+                    .post(&format!("{}{}/deleteMessage", *BOT_BASE_URL, *BOT_TOKEN))
                     .json(&body)
                     .send()
                     .await
