@@ -10,3 +10,4 @@ qfclaw*
 .python*
 *uv*
 *venv*
+pyproject.toml
