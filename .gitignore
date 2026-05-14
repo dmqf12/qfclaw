@@ -7,3 +7,6 @@ target
 qfclaw*
 *.sh
 !build.sh
+.python*
+*uv*
+*venv*
