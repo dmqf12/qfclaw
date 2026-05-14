@@ -93,6 +93,7 @@ async fn exec(params: Value) -> String {
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(cmd_text)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
