@@ -1,0 +1,9 @@
+messages/
+Cargo.lock
+workspace/*
+!workspace/*.md
+!workspace/skill/
+target
+qfclaw*
+*.sh
+!build.sh
