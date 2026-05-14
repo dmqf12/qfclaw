@@ -80,47 +80,74 @@ async fn notify(msg: &str, clear: bool) {
 }
 
 
+
+
 async fn exec(params: Value) -> String {
     let cmd_text = params["command"].as_str().unwrap_or("");
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
+    let task_dir = format!("/tmp/qfclawtask/{}", task_id);
 
-    // 1. 发送初始消息并获取 msg_id
+    // 1. 发送初始消息
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
     let (msg_id, _) = SendMessage::new(&start_msg).fold().send().await.unwrap_or_default();
-    println!("{}", start_msg);
 
+    // 2. 环境准备 (改为等待 status 确保完成，而不是 sleep)
+    let _ = Command::new("mkdir").args(["-p", &task_dir]).status().await;
+
+    // 写入脚本 (注意：sudo 增加绝对路径 /usr/bin/sudo 避免函数递归)
+    let qfsudo_content = format!(
+        "tmpfile=$(mktemp {}/XXXXXXXX) && printf \"%s\\n\" \"$*\" > \"$tmpfile\" && chmod +x \"$tmpfile\" && /usr/bin/sudo \"$tmpfile\"",
+        task_dir
+    );
+    let exec_content = format!("sudo() {{ {}/qfsudo \"$@\"; }}\n{}", task_dir, cmd_text);
+
+    _ = fs::write(format!("{}/qfsudo", task_dir), qfsudo_content);
+    _ = fs::write(format!("{}/exec.sh", task_dir), exec_content);
+
+    // 立即执行 chmod 并等待完成
+    let _ = Command::new("chmod")
+        .args(["+x", &format!("{}/exec.sh", task_dir), &format!("{}/qfsudo", task_dir)])
+        .status()
+        .await;
+
+    // 3. 启动主进程
     let mut child = Command::new("bash")
         .arg("-c")
-        .arg(cmd_text)
-        .stdin(Stdio::null())
+        .arg(format!("{}/exec.sh", task_dir)) // 删掉了 && #rm，清理逻辑放在 Rust 里更安全
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("Failed to spawn");
 
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
     let output_buf = Arc::new(Mutex::new(String::new()));
     let output_clone = output_buf.clone();
 
+    // 4. 异步捕获输出 (stdout 和 stderr)
     tokio::spawn(async move {
-        let mut reader = stdout.chain(stderr);
+        let mut combined_reader = stdout.chain(stderr); // 注意：需引入 AsyncReadExt
         let mut buffer = [0; 1024];
-        while let Ok(n) = reader.read(&mut buffer).await {
+        while let Ok(n) = combined_reader.read(&mut buffer).await {
             if n == 0 { break; }
-            output_clone.lock().await.push_str(&String::from_utf8_lossy(&buffer[..n]));
+            let mut lock = output_clone.lock().await;
+            lock.push_str(&String::from_utf8_lossy(&buffer[..n]));
         }
     });
 
-    // 2. 执行等待逻辑
+    // 5. 执行等待逻辑
     let res_text = match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
-        Ok(status) => {
+        Ok(wait_result) => {
             let log = output_buf.lock().await.clone();
-            let code = status.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
+            let code = wait_result.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
+            // 任务成功结束，清理临时目录
+            let _ = Command::new("rm").args(["-rf", &task_dir]).status().await;
             format!("✅ 任务完成 (Code {}):\n{}", code, log)
         }
         Err(_) => {
+            // 超时处理：将 child 句柄存入全局 Task 字典（假设 TASKS 已定义）
             TASKS.lock().await.insert(
                 task_id.clone(),
                 TaskHandle { child, output: output_buf.clone() }
@@ -132,9 +159,7 @@ async fn exec(params: Value) -> String {
         }
     };
 
-    // 3. 任务结束（完成或转入后台）时清理消息
     clear_up(msg_id, msg_id, 3);
-
     res_text
 }
 
