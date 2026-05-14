@@ -36,6 +36,17 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         if user_input.is_empty() {
             continue;
         }
+        if user_input == "/stop" {
+            if let Some((handle, _)) = current_task.take() {
+                handle.abort();
+                _ = SendMessage::new("🛑 任务已停止").send().await;
+            } else {
+                if let Ok((msg_id, _)) = SendMessage::new("⚠️ 当前没有正在运行的任务").send().await {
+                    clear_up(msg_id - 1, msg_id, 0);
+                }
+            }
+            continue;
+        }
 
         if ["/new", "/clear", "/restart", "/retry", "/status", "/reasoning"]
             .iter()
