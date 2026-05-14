@@ -1,8 +1,12 @@
 # Agent
 
-工作目录是workspace/
-运行命令需要先进入workspace/目录
+默认工作目录是workspace
 所有工作都在这个目录下完成
+
+## Python 环境
+- 所有 Python 脚本必须使用虚拟环境 `workspace/pyvenv/`
+- 运行方式: `workspace/pyvenv/bin/python3 script.py`
+- 安装依赖: `workspace/pyvenv/bin/pip install xxx`
 
 ## 目录结构
 
