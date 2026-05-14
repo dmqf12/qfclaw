@@ -1,18 +1,15 @@
 use std::fs;
 
+use anyhow::{Context, Result, anyhow};
 use futures::StreamExt;
-use reqwest::Client;
-use serde_json::{json, Value};
-use anyhow::{anyhow, Context, Result};
-use std::collections::BTreeMap;
 use rand;
+use reqwest::Client;
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use tokio::sync::{mpsc, oneshot};
 
-use toolcall::*;
 use sendmsg::*;
-
-
-
+use toolcall::*;
 
 struct StreamProcessor {
     full_response: String,
@@ -20,7 +17,7 @@ struct StreamProcessor {
     start_response: bool,
     tool_calls_map: BTreeMap<u64, (String, String)>,
     usage: Option<Value>,
-    show_reasoning_mode: String
+    show_reasoning_mode: String,
 }
 
 impl StreamProcessor {
@@ -31,11 +28,15 @@ impl StreamProcessor {
             start_response: false,
             tool_calls_map: BTreeMap::new(),
             usage: None,
-            show_reasoning_mode: String::new()
+            show_reasoning_mode: String::new(),
         }
     }
 
-    async fn process_chunk(&mut self, chunk: &[u8], show_reasoning_mode: &str) -> Result<Option<Value>, anyhow::Error> {
+    async fn process_chunk(
+        &mut self,
+        chunk: &[u8],
+        show_reasoning_mode: &str,
+    ) -> Result<Option<Value>, anyhow::Error> {
         self.show_reasoning_mode = show_reasoning_mode.to_string();
         let text = String::from_utf8_lossy(chunk);
         for line in text.lines().map(|s| s.trim()) {
@@ -55,7 +56,7 @@ impl StreamProcessor {
             Ok(resp) => chunk = resp,
             Err(e) => println!("{}---{}", e, data),
         }
-        
+
         // 1. 记录 usage
         if let Some(usage) = chunk.get("usage") {
             self.usage = Some(usage.clone());
@@ -68,7 +69,11 @@ impl StreamProcessor {
         if let Some(reasoning) = delta["reasoning_content"].as_str() {
             self.full_reasoning.push_str(reasoning);
             if !self.start_response && self.full_reasoning.len() % 32 == 0 {
-                tokio::spawn(SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning)).is_draft().send());
+                tokio::spawn(
+                    SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning))
+                        .is_draft()
+                        .send(),
+                );
             }
         }
 
@@ -105,19 +110,27 @@ impl StreamProcessor {
     }
 
     async fn finalize(&mut self) -> Option<Value> {
-
         let mut message = json!({ "role": "assistant" });
-        if !self.full_reasoning.is_empty() { message["reasoning_content"] = json!(self.full_reasoning); }
-        if !self.full_response.is_empty() { message["content"] = json!(self.full_response); }
+        if !self.full_reasoning.is_empty() {
+            message["reasoning_content"] = json!(self.full_reasoning);
+        }
+        if !self.full_response.is_empty() {
+            message["content"] = json!(self.full_response);
+        }
 
         if !self.tool_calls_map.is_empty() {
-            message["tool_calls"] = json!(self.tool_calls_map.iter().map(|(idx, (n, a))| {
-                json!({
-                    "id": format!("call_{}_{}", idx, rand::random::<u32>()),
-                    "type": "function",
-                    "function": { "name": n, "arguments": a }
-                })
-            }).collect::<Vec<_>>());
+            message["tool_calls"] = json!(
+                self.tool_calls_map
+                    .iter()
+                    .map(|(idx, (n, a))| {
+                        json!({
+                            "id": format!("call_{}_{}", idx, rand::random::<u32>()),
+                            "type": "function",
+                            "function": { "name": n, "arguments": a }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            );
         }
 
         Some(json!({
@@ -138,11 +151,7 @@ impl StreamProcessor {
             }
         }
     }
-
 }
-
-
-
 
 fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
     let content = chat_result["choices"][0]["message"]["content"]
@@ -150,24 +159,30 @@ fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
         .unwrap_or_default();
     let reasoning = chat_result["choices"][0]["message"]["reasoning_content"]
         .as_str()
-        .unwrap_or_default();   
+        .unwrap_or_default();
     // 直接取出 Value，如果是 None 则创建新的空数组
     let tool_calls = chat_result["choices"][0]["message"]
         .get("tool_calls")
         .map(|v| v.clone())
-        .unwrap_or_else(|| Value::Array(Vec::new()));    
-    let total_tokens = chat_result["usage"]["total_tokens"]
-        .as_u64()
-        .unwrap_or(0);    
-    (content.to_string(), reasoning.to_string(), tool_calls, total_tokens)
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let total_tokens = chat_result["usage"]["total_tokens"].as_u64().unwrap_or(0);
+    (
+        content.to_string(),
+        reasoning.to_string(),
+        tool_calls,
+        total_tokens,
+    )
 }
 
-async fn chat(api_key: &str, base_url: &str, payload: &Value, show_reasoning_mode: &str) -> Result<serde_json::Value> {
+async fn chat(
+    api_key: &str,
+    base_url: &str,
+    payload: &Value,
+    show_reasoning_mode: &str,
+) -> Result<serde_json::Value> {
     let client = Client::new();
     let url = format!("{}/chat/completions", base_url);
-    let stream_out = payload["stream"]
-        .as_bool()
-        .unwrap_or(true);
+    let stream_out = payload["stream"].as_bool().unwrap_or(true);
     let response = client
         .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
@@ -187,15 +202,16 @@ async fn chat(api_key: &str, base_url: &str, payload: &Value, show_reasoning_mod
 
     if !stream_out {
         let chat_response: Value = response.json().await?;
-        return Ok(chat_response)
-            
-            
+        return Ok(chat_response);
     } else {
         let mut processor = StreamProcessor::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.context("读取流失败")?;
-            if let Some(final_value) = processor.process_chunk(&chunk, &show_reasoning_mode).await? {
+            if let Some(final_value) = processor
+                .process_chunk(&chunk, &show_reasoning_mode)
+                .await?
+            {
                 return Ok(final_value);
             }
         }
@@ -203,11 +219,9 @@ async fn chat(api_key: &str, base_url: &str, payload: &Value, show_reasoning_mod
     }
 }
 
-
-
 fn build_system_prompt() -> String {
     let path = "workspace";
-    let files = ["SOUL.md", "Agent.md", "SKILL.md"];
+    let files = ["SOUL.md", "Agent.md", "SKILL.md", "User.md"];
     files
         .iter()
         .filter_map(|f| fs::read_to_string(format!("{}/{}", path, f)).ok())
@@ -218,11 +232,11 @@ fn build_system_prompt() -> String {
 fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)> {
     println!("{}", user_input);
     if user_input.is_empty() {
-        return Err(anyhow!("空消息"))
+        return Err(anyhow!("空消息"));
     }
     //  检查对话记录
     let messages_path = "messages/";
-    fs::create_dir_all(&messages_path)?;  // 已存在时不会报错
+    fs::create_dir_all(&messages_path)?; // 已存在时不会报错
     let msg_file = format!("{}/messages.json", &messages_path);
     let mut messages: Vec<Value> = fs::File::open(&msg_file)
         .ok()
@@ -238,11 +252,9 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
     if let Ok(model_file) = fs::File::open("config/models.json") {
         let model_list: Value = match serde_json::from_reader(model_file) {
             Ok(resp) => resp,
-            Err(e) => return Err(anyhow!("model.json解析失败: {}", e))
+            Err(e) => return Err(anyhow!("model.json解析失败: {}", e)),
         };
-        let model_name = model_list["use_model"]
-            .as_str()
-            .unwrap_or_default();
+        let model_name = model_list["use_model"].as_str().unwrap_or_default();
         model_config = model_list
             .get("config")
             .ok_or_else(|| anyhow!("models.json解析失败"))?
@@ -256,21 +268,13 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
         return Err(anyhow!("models.json解析失败或不存在"));
     }
 
-    let api_key = model["token"]
-        .as_str()
-        .unwrap_or_default();
+    let api_key = model["token"].as_str().unwrap_or_default();
     let base_url = model["base_url"]
         .as_str()
         .unwrap_or("https://api.deepseek.com/v1");
-    let model_name = model["model_name"]
-        .as_str()
-        .unwrap_or_default();
-    let stream: bool = model_config["stream"]
-        .as_bool()
-        .unwrap_or(true);
-    let mut show_reasoning_mode = model_config["reasoning"]
-        .as_str()
-        .unwrap_or("enabled");
+    let model_name = model["model_name"].as_str().unwrap_or_default();
+    let stream: bool = model_config["stream"].as_bool().unwrap_or(true);
+    let mut show_reasoning_mode = model_config["reasoning"].as_str().unwrap_or("enabled");
     let mut reasoning = "";
     if show_reasoning_mode.contains("draft") {
         reasoning = show_reasoning_mode.split('_').last().unwrap();
@@ -284,7 +288,7 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
         reasoning = show_reasoning_mode;
     }
     messages.push(json!({"role": "user", "content": user_input}));
-    
+
     let func: serde_json::Value = fs::File::open("config/function_call.json")
         .ok()
         .and_then(|file| serde_json::from_reader(file).ok())
@@ -299,7 +303,13 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
         "tool_choice":  "auto",
         "max_tokens": 4096
     });
-    return Ok((payload, messages, base_url.to_string(), api_key.to_string(), show_reasoning_mode.to_string()));
+    return Ok((
+        payload,
+        messages,
+        base_url.to_string(),
+        api_key.to_string(),
+        show_reasoning_mode.to_string(),
+    ));
 }
 
 fn 记录token(total_tokens: u64) -> Result<()> {
@@ -314,11 +324,13 @@ fn 记录token(total_tokens: u64) -> Result<()> {
 }
 fn 保存消息(messages: &Vec<Value>) -> Result<()> {
     let msg_file = "messages/messages.json";
-    serde_json::to_writer_pretty(fs::File::create(format!("{}.tmp", msg_file))?, &messages[1..])?;
+    serde_json::to_writer_pretty(
+        fs::File::create(format!("{}.tmp", msg_file))?,
+        &messages[1..],
+    )?;
     fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
     Ok(())
 }
-
 
 fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
     if let Some(obj) = messages.last_mut().and_then(|m| m.as_object_mut()) {
@@ -326,7 +338,6 @@ fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
     }
     messages
 }
-
 
 pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
     let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(user_input)?;
@@ -340,7 +351,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
             Ok(resp) => resp,
             Err(e) => {
                 let _ = SendMessage::new(&e.to_string()).send().await;
-                break
+                break;
             }
         };
 
@@ -357,22 +368,23 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
             println!("打断❓");
             payload["messages"] = Value::Array(messages.clone());
             保存消息(&messages)?;
-            continue
+            continue;
         }
-        if let Some(arr) = tool_calls.as_array() && !arr.is_empty() {
-
+        if let Some(arr) = tool_calls.as_array()
+            && !arr.is_empty()
+        {
             messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning, "tool_calls": tool_calls}));
 
             // --- 每次 tool_call 时创建一个 oneshot 通道用于接收反馈 ---
             let (tx_feedback, rx_feedback) = oneshot::channel::<Value>();
-            
-            let request = ToolRequest { 
-                payload: tool_calls, 
-                resp_tx: tx_feedback // 把 oneshot 的发送端传给任务
+
+            let request = ToolRequest {
+                payload: tool_calls,
+                resp_tx: tx_feedback, // 把 oneshot 的发送端传给任务
             };
 
             let mut tool_calls_result = json!([]);
-            
+
             // 使用 mpsc 发送请求
             if tool_tx.send(request).await.is_ok() {
                 // 等待 oneshot 反馈结果
@@ -387,14 +399,14 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
             messages.extend(tool_calls_result.as_array().unwrap().clone());
             payload["messages"] = Value::Array(messages.clone());
             保存消息(&messages)?;
-
         } else {
-            messages.push(json!({"role": "assistant", "content": content, "reasoning_content": reasoning}));
+            messages.push(
+                json!({"role": "assistant", "content": content, "reasoning_content": reasoning}),
+            );
             payload["messages"] = Value::Array(messages.clone());
             保存消息(&messages)?;
-            break
+            break;
         }
     }
     Ok(())
 }
-
