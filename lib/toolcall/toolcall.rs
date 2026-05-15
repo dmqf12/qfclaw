@@ -86,7 +86,7 @@ async fn exec(params: Value) -> String {
     let cmd_text = params["command"].as_str().unwrap_or("");
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
-    let task_dir = format!("/tmp/qfclawtask/{}", task_id);
+    let task_dir = format!("qfclawtask/{}", task_id);
 
     // 1. 发送初始消息
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
