@@ -100,7 +100,7 @@ async fn exec(params: Value) -> String {
         "tmpfile=$(mktemp {}/XXXXXXXX) && printf \"%s\\n\" \"$*\" > \"$tmpfile\" && chmod +x \"$tmpfile\" && /usr/bin/sudo \"$tmpfile\"",
         task_dir
     );
-    let exec_content = format!("sudo() {{ {}/qfsudo \"$@\"; }}\n{}", task_dir, cmd_text);
+    let exec_content = format!("source workspace/pyvenv/bin/activate\nsudo() {{ {}/qfsudo \"$@\"; }}\n{}", task_dir, cmd_text);
 
     _ = fs::write(format!("{}/qfsudo", task_dir), qfsudo_content);
     _ = fs::write(format!("{}/exec.sh", task_dir), exec_content);
