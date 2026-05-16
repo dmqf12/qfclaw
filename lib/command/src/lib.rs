@@ -103,8 +103,8 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
     if cmd_text == "/restart" {
         let (msg_id, _) = SendMessage::new("🔄重启中").send().await?;
         clear_up(msg_id - 1, msg_id, 0);
-        tokio::time::sleep(tokio::time::Duration::from_millis(10000)).await;
-        match Command::new("bash").arg("qf").output() {
+        tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+        match Command::new("bash").arg("-c").arg("systemctl --user restart qfclaw").output() {
             Ok(_) => return Ok(true),
             Err(_) => return Ok(false),
         };
@@ -130,7 +130,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
     }
     if cmd_text == "/reasoning" {
          let msg_id = send_inline("是否显示推理过程", json!([
-            [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}], 
+            [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}],
             [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await?;
          clear_up(msg_id - 1, msg_id - 1, 0);
     }
