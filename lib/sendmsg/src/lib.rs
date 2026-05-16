@@ -263,11 +263,19 @@ pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
 
         let client = Client::new();
         let mut body = json!({"chat_id": *ALLOW_ID});
-
+        let mut session: Value = fs::File::open("messages/session.json")
+            .ok()
+            .and_then(|file| serde_json::from_reader(file).ok())
+            .unwrap_or_default();
+        let mut cleared = session["already_cleared"].as_array().unwrap_or(&vec![]).clone();
         for id in (start_id..=end_id).rev() {
             if id > 9990000 {
                 break;
             }
+            if cleared.contains(&json!(id)) {
+                continue
+            }
+            cleared.push(json!(id));
             body["message_id"] = json!(id);
             for attempt in 0..2 {
                 match client
@@ -281,6 +289,10 @@ pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
                     Err(e) => eprintln!("删除 {id} 重试 {}: {e}", attempt + 1),
                 }
             }
+        }
+        session["already_cleared"] = json!(cleared);
+        if let Ok(file) = fs::File::create("messages/session.json") {
+            _ = serde_json::to_writer_pretty(file, &session);
         }
     });
 }
