@@ -144,7 +144,7 @@ async fn exec(params: Value) -> String {
             let code = wait_result.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
             // 任务成功结束，清理临时目录
             let _ = Command::new("rm").args(["-rf", &task_dir]).status().await;
-            format!("✅ 任务完成 (Code {}):\n{}", code, log)
+            format!("⚡任务完成 (Code {}):\n{}", code, log)
         }
         Err(_) => {
             // 超时处理：将 child 句柄存入全局 Task 字典（假设 TASKS 已定义）
@@ -153,7 +153,7 @@ async fn exec(params: Value) -> String {
                 TaskHandle { child, output: output_buf.clone() }
             );
             let current_log = output_buf.lock().await.clone();
-            let msg = format!("⏳ 任务超时转入后台，ID: {}", task_id);
+            let msg = format!("⏳任务超时转入后台，ID: {}", task_id);
             notify(&msg, true).await;
             format!("{}\n当前输出:\n{}", msg, current_log)
         }
