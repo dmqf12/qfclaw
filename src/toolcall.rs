@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use uuid::Uuid;
 use tokio::sync::{oneshot};
-use sendmsg::*;
+use crate::sendmsg::*;
 
 async fn read(file: &str) -> String {
     notify(&format!("🔧读取：{}", file), true).await;

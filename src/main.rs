@@ -1,4 +1,8 @@
-use sendmsg::*;
+mod aichat;
+mod toolcall;
+mod command;
+pub mod sendmsg;
+use crate::sendmsg::*;
 use serde_json::{Value};
 use std::time::Duration;
 use tokio::sync::mpsc;
