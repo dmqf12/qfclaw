@@ -92,7 +92,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         fs::create_dir_all(format!("messages/{target_path}"))?;
         let target_file = format!("messages/{}/{}.json", target_path, date_now());
         let _ = fs::rename("messages/messages.json", target_file);
-        let (new_msg_id, _) = SendMessage::new("✅ New session started").send().await?;
+        let new_msg_id = SendMessage::new("✅ New session started").send().await;
         fs::create_dir_all("messages")?;
         let session = json!({"last_session_start": new_msg_id, "total_tokens": 0});
         serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
@@ -101,7 +101,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         Box::pin(exec_cmd("/mv_session archive", msg)).await?;
     }
     if cmd_text == "/restart" {
-        let (msg_id, _) = SendMessage::new("🔄重启中").send().await?;
+        let msg_id = SendMessage::new("🔄重启中").send().await;
         clear_up(msg_id - 1, msg_id, 0);
         tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
         match Command::new("bash").arg("-c").arg("systemctl --user restart qfclaw").output() {
@@ -119,13 +119,13 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
             .and_then(|file| serde_json::from_reader(file).ok())
             .unwrap_or_default();
         let n = session["total_tokens"].as_u64().unwrap_or(0);
-        let (msg_id, _) = SendMessage::new(&format!(
+        let msg_id = SendMessage::new(&format!(
             "📚 Context: {:.1}K/1M ({:.1}%)",
             n as f64 / 1000.0,
             n as f64 / 10000.
         ))
         .send()
-        .await?;
+        .await;
         clear_up(msg_id - 1, msg_id, 5);
     }
     if cmd_text == "/reasoning" {
@@ -136,17 +136,17 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
     }
 
     if cmd_text == "/clear" {
-        let (message_id, _) = SendMessage::new("🧹Clear up immediately").send().await?;
+        let message_id = SendMessage::new("🧹Clear up immediately").send().await;
         let session: Value = fs::File::open(session_file)
             .ok()
             .and_then(|file| serde_json::from_reader(file).ok())
             .unwrap_or_default();
         let last_session_id = session["last_session_start"].as_u64().unwrap_or(9999999);
         if last_session_id != 9999999 {
-            Box::pin(exec_cmd("/mv_session clear", msg)).await?;
+            _ = Box::pin(exec_cmd("/mv_session clear", msg)).await;
             clear_up(last_session_id, message_id, 0);
         } else {
-            SendMessage::new("🧹当前无session可清理").send().await?;
+            SendMessage::new("🧹当前无session可清理").send().await;
         }
     }
 

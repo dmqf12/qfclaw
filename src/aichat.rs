@@ -143,9 +143,8 @@ impl StreamProcessor {
         if !self.full_reasoning.is_empty() {
             let msg_send = SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning));
             if self.show_reasoning_mode == "draft" {
-                if let Ok((msg_id, _)) = msg_send.send().await {
-                    clear_up(msg_id, msg_id, 5);
-                }
+                let msg_id = msg_send.send().await;
+                clear_up(msg_id, msg_id, 5);
             } else {
                 _ = msg_send.fold().send().await;
             }
@@ -154,6 +153,7 @@ impl StreamProcessor {
 }
 
 fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
+    print_json(chat_result);
     let content = chat_result["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or_default();
@@ -301,7 +301,7 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
         "messages": messages,
         "tools": func,
         "tool_choice":  "auto",
-        "max_tokens": 4096
+        "max_tokens": 20480
     });
     return Ok((
         payload,

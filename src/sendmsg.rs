@@ -146,6 +146,16 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
     Ok(msg_id)
 }
 
+
+fn unicode_slice(s: &str, start: usize, end: usize) -> String {
+    let mut indices = s.char_indices();
+    let start_byte = indices.nth(start).map(|(i, _)| i).unwrap_or(s.len());
+    let end_byte = indices.nth(end - start - 1).map(|(i, _)| i).unwrap_or(s.len());
+    s[start_byte..end_byte].to_string()
+}
+
+
+
 pub struct SendMessage {
     text: String,
     id: i64,
@@ -186,18 +196,32 @@ impl SendMessage {
         self.do_clear = true;
         self
     }
-    pub async fn send(mut self) -> Result<(u64, String)> {
+
+    pub async fn send(mut self) -> u64 {
+        let mut msg_id = 99999999;
         if self.text.is_empty() {
             println!("无法发送空消息❎");
-            return Ok((99999999, String::new()));
+            return msg_id
         }
         if self.id == 0 {
-            return Ok((99999999, String::new()));
+            return msg_id
         }
         let client = Client::new();
-        let mut msg_id = 99999999;
-        let mut msg_text = String::new();
-        for _i in 1..3 {
+        let mut failed_times = 0;
+        let mut new_text = self.text.clone();
+        loop {
+            if new_text.chars().count() > 1000 {
+                if self.draft.is_empty() {
+                    self.text = unicode_slice(&new_text, 0, 1000);
+                    new_text = unicode_slice(&new_text, 1000, usize::MAX);
+                } else {
+                    self.text = unicode_slice(&new_text, new_text.chars().count() - 1000, usize::MAX);
+                    new_text = "".to_string();
+                }
+            } else {
+                self.text = new_text;
+                new_text = "".to_string();
+            }
             let mut body = json!({
             "chat_id": self.id,
             "text": self.text,
@@ -206,15 +230,17 @@ impl SendMessage {
             if !self.draft.is_empty() {
                 body["draft_id"] = json!(1)
             }
-            let result = client
-                .post(&format!(
-                    "{}{}/sendMessage{}",
-                    *BOT_BASE_URL, *BOT_TOKEN, self.draft
-                ))
-                .json(&body)
-                .send()
-                .await?;
-            let status: Value = result.json().await?;
+            let mut status = json!( { "ok": false } );
+            if let Ok(result) = client.post(&format!("{}{}/sendMessage{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await {
+                if let Ok(resp) = result.json().await {
+                    status = resp;
+                }
+            } else {
+                failed_times = failed_times + 1
+            }
+            if failed_times > 2 {
+                return msg_id
+            }
             let status_ok = status["ok"].as_bool().unwrap_or(false);
             if !status_ok {
                 if let Some(p) = status.get("description") {
@@ -225,8 +251,6 @@ impl SendMessage {
                         }
                         println!("{}", status);
                         println!("重新发送❌❌");
-                    } else if p.to_string().contains("non-empty") {
-                        break;
                     } else {
                         println!("{}", status);
                         println!(
@@ -245,14 +269,12 @@ impl SendMessage {
                 if self.do_clear {
                     clear_up(msg_id, msg_id, 0);
                 }
-                msg_text = status["result"]["text"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
-                break;
+                if new_text.is_empty() {
+                    break
+                }
             }
         }
-        return Ok((msg_id, msg_text));
+        return msg_id
     }
 }
 

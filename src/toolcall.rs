@@ -72,10 +72,9 @@ lazy_static::lazy_static! {
 
 async fn notify(msg: &str, clear: bool) {
     println!("{}", msg);
-    if let Ok((msg_id, _)) = SendMessage::new(msg).fold().send().await {
-        if clear {
-            clear_up(msg_id, msg_id, 5);
-        }
+    let msg_id = SendMessage::new(msg).fold().send().await;
+    if clear {
+        clear_up(msg_id, msg_id, 5);
     }
 }
 
@@ -90,7 +89,7 @@ async fn exec(params: Value) -> String {
 
     // 1. 发送初始消息
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
-    let (msg_id, _) = SendMessage::new(&start_msg).fold().send().await.unwrap_or_default();
+    let msg_id = SendMessage::new(&start_msg).fold().send().await;
 
     // 2. 环境准备 (改为等待 status 确保完成，而不是 sleep)
     let _ = Command::new("mkdir").args(["-p", &task_dir]).status().await;
