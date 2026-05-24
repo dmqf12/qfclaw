@@ -210,12 +210,12 @@ impl SendMessage {
         let mut failed_times = 0;
         let mut new_text = self.text.clone();
         loop {
-            if new_text.chars().count() > 1000 {
+            if new_text.chars().count() > 4096 {
                 if self.draft.is_empty() {
-                    self.text = unicode_slice(&new_text, 0, 1000);
-                    new_text = unicode_slice(&new_text, 1000, usize::MAX);
+                    self.text = unicode_slice(&new_text, 0, 4096);
+                    new_text = unicode_slice(&new_text, 4096, usize::MAX);
                 } else {
-                    self.text = unicode_slice(&new_text, new_text.chars().count() - 1000, usize::MAX);
+                    self.text = unicode_slice(&new_text, new_text.chars().count() - 4096, usize::MAX);
                     new_text = "".to_string();
                 }
             } else {
@@ -251,6 +251,9 @@ impl SendMessage {
                         }
                         println!("{}", status);
                         println!("重新发送❌❌");
+                    } else if p.to_string().contains("empty") {
+                        println!("无法发送空消息❎");
+                        break
                     } else {
                         println!("{}", status);
                         println!(
