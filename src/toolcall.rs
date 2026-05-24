@@ -99,7 +99,11 @@ async fn exec(params: Value) -> String {
         "tmpfile=$(mktemp {}/XXXXXXXX) && printf \"%s\\n\" \"$*\" > \"$tmpfile\" && chmod +x \"$tmpfile\" && /usr/bin/sudo \"$tmpfile\"",
         task_dir
     );
-    let exec_content = format!("source workspace/pyvenv/bin/activate\ncat() {{ file \"$1\" | grep -q text && /bin/cat \"$1\" || echo \"跳过二进制文件: $1\"; }}\nsudo() {{ {}/qfsudo \"$@\"; }}\n{}", task_dir, cmd_text);
+    let exec_content = format!(
+        "source workspace/pyvenv/bin/activate\ncat() {{ [ \"$(wc -c < \"$1\" 2>/dev/null || echo 0)\" -le 1048576 ] && /bin/cat \"$1\" || echo \"跳过大文件: $1\"; }}\nsudo() {{ {}/qfsudo \"$@\"; }}\n{}",
+        task_dir,
+        cmd_text
+    );
 
     _ = fs::write(format!("{}/qfsudo", task_dir), qfsudo_content);
     _ = fs::write(format!("{}/exec.sh", task_dir), exec_content);
