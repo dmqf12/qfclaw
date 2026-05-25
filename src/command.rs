@@ -141,8 +141,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
             .ok()
             .and_then(|file| serde_json::from_reader(file).ok())
             .unwrap_or_default();
-        let last_session_id = session["last_session_start"].as_u64().unwrap_or(9999999);
-        if last_session_id != 9999999 {
+        if let Some(last_session_id) = session["last_session_start"].as_u64() {
             _ = Box::pin(exec_cmd("/mv_session clear", msg)).await;
             clear_up((last_session_id..=message_id[0]).collect(), 0);
         } else {

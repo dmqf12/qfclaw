@@ -121,7 +121,7 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
 
 pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
     let client = Client::new();
-    let mut msg_id = 99999999;
+    let mut msg_id = 9999999;
     let body = json!({
         "chat_id": *ALLOW_ID,
         "text": text,
@@ -198,7 +198,7 @@ impl SendMessage {
     }
 
     pub async fn send(mut self) -> Vec<u64> {
-        let mut msg_id = vec![99999999];
+        let mut msg_id = vec![];
         if self.text.is_empty() || self.id == 0{
             return msg_id
         }
@@ -273,7 +273,11 @@ impl SendMessage {
                 }
             }
         }
-        return msg_id
+        if msg_id.is_empty() {
+            return vec![9999999]
+        } else {
+            return msg_id
+        }
     }
 }
 
