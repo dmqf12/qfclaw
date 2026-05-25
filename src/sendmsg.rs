@@ -93,12 +93,12 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
     if text.contains("reasoning") {
         if text.contains("set") {
             if text.contains("draft") {
-                clear_up(msg_id, msg_id, 0);
+                clear_up(vec!(msg_id), 0);
                 _ = send_inline("请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_draft_enabled"}, {"text": "适应", "callback_data": "reasoning_draft_adaptive"}] ])).await;
             }
             if text.contains("fold") {
-                clear_up(msg_id, msg_id, 0);
+                clear_up(vec!(msg_id), 0);
                 _ = send_inline("请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
             }
@@ -113,15 +113,15 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         models["config"]["reasoning"] = json!(content);
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
-        clear_up(msg_id, msg_id, 0);
+        clear_up(vec!(msg_id), 0);
         _ = SendMessage::new("✅操作成功").clear().send().await;
     }
     Ok(true)
 }
 
-pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
+pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<Vec<u64>> {
     let client = Client::new();
-    let mut msg_id = 99999999;
+    let mut msg_id: Vec<u64> = vec![99999999];
     let body = json!({
         "chat_id": *ALLOW_ID,
         "text": text,
@@ -139,7 +139,7 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
             println!("重新发送❌❌");
         } else {
             println!("ok: true, result: true");
-            msg_id = status["result"]["message_id"].as_u64().unwrap_or_default();
+            msg_id.push(status["result"]["message_id"].as_u64().unwrap_or_default());
             break;
         }
     }
@@ -197,13 +197,9 @@ impl SendMessage {
         self
     }
 
-    pub async fn send(mut self) -> u64 {
-        let mut msg_id = 99999999;
-        if self.text.is_empty() {
-            println!("无法发送空消息❎");
-            return msg_id
-        }
-        if self.id == 0 {
+    pub async fn send(mut self) -> Vec<u64> {
+        let mut msg_id = vec![99999999];
+        if self.text.is_empty() || self.id == 0{
             return msg_id
         }
         let client = Client::new();
@@ -268,9 +264,9 @@ impl SendMessage {
                 } else {
                     println!("发送成功");
                 }
-                msg_id = status["result"]["message_id"].as_u64().unwrap_or_default();
+                msg_id.push(status["result"]["message_id"].as_u64().unwrap_or_default());
                 if self.do_clear {
-                    clear_up(msg_id, msg_id, 0);
+                    clear_up(msg_id.clone(), 0);
                 }
                 if new_text.is_empty() {
                     break
@@ -281,9 +277,8 @@ impl SendMessage {
     }
 }
 
-pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
+pub fn clear_up(ids: Vec<u64>, delay_secs: u64) {
     tokio::spawn(async move {
-        // 延迟 n 秒后开始删除
         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
         let client = Client::new();
@@ -293,12 +288,13 @@ pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
             .and_then(|file| serde_json::from_reader(file).ok())
             .unwrap_or_default();
         let mut cleared = session["already_cleared"].as_array().unwrap_or(&vec![]).clone();
-        for id in (start_id..=end_id).rev() {
-            if id > 9990000 {
+
+        for id in ids.iter().rev() {
+            if *id > 9990000 {
                 break;
             }
             if cleared.contains(&json!(id)) {
-                continue
+                continue;
             }
             cleared.push(json!(id));
             body["message_id"] = json!(id);
@@ -310,11 +306,12 @@ pub fn clear_up(start_id: u64, end_id: u64, delay_secs: u64) {
                     .await
                 {
                     Ok(_) => break,
-                    Err(e) if attempt == 1 => eprintln!("删除 {id} 失败: {e}"),
-                    Err(e) => eprintln!("删除 {id} 重试 {}: {e}", attempt + 1),
+                    Err(e) if attempt == 1 => eprintln!("删除 {} 失败: {e}", id),
+                    Err(e) => eprintln!("删除 {} 重试 {}: {e}", id, attempt + 1),
                 }
             }
         }
+
         session["already_cleared"] = json!(cleared);
         if let Ok(file) = fs::File::create("messages/session.json") {
             _ = serde_json::to_writer_pretty(file, &session);

@@ -47,7 +47,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
                 _ = SendMessage::new("🛑 任务已停止").send().await;
             } else {
                 let msg_id = SendMessage::new("⚠️ 当前没有正在运行的任务").send().await;
-                clear_up(msg_id - 1, msg_id, 3);
+                clear_up(((msg_id[0] - 1)..=msg_id[0]).collect(), 3);
             }
             continue;
         }

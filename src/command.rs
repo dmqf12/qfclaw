@@ -102,7 +102,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
     }
     if cmd_text == "/restart" {
         let msg_id = SendMessage::new("🔄重启中").send().await;
-        clear_up(msg_id - 1, msg_id, 0);
+        clear_up(((msg_id[0] - 1)..=msg_id[0]).collect(), 0);
         tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
         match Command::new("bash").arg("-c").arg("systemctl --user restart qfclaw").output() {
             Ok(_) => return Ok(true),
@@ -126,13 +126,13 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         ))
         .send()
         .await;
-        clear_up(msg_id - 1, msg_id, 5);
+        clear_up(((msg_id[0] - 1)..=msg_id[0]).collect(), 5);
     }
     if cmd_text == "/reasoning" {
          let msg_id = send_inline("是否显示推理过程", json!([
             [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}],
             [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await?;
-         clear_up(msg_id - 1, msg_id - 1, 0);
+         clear_up(((msg_id[0] - 1)..msg_id[0]).collect(), 0);
     }
 
     if cmd_text == "/clear" {
@@ -144,7 +144,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         let last_session_id = session["last_session_start"].as_u64().unwrap_or(9999999);
         if last_session_id != 9999999 {
             _ = Box::pin(exec_cmd("/mv_session clear", msg)).await;
-            clear_up(last_session_id, message_id, 0);
+            clear_up((last_session_id..=message_id[0]).collect(), 0);
         } else {
             SendMessage::new("🧹当前无session可清理").send().await;
         }

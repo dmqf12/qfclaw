@@ -74,7 +74,7 @@ async fn notify(msg: &str, clear: bool) {
     println!("{}", msg);
     let msg_id = SendMessage::new(msg).fold().send().await;
     if clear {
-        clear_up(msg_id, msg_id, 5);
+        clear_up(msg_id, 5);
     }
 }
 
@@ -162,7 +162,7 @@ async fn exec(params: Value) -> String {
         }
     };
 
-    clear_up(msg_id, msg_id, 3);
+    clear_up(msg_id, 3);
     res_text
 }
 

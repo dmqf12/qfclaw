@@ -144,7 +144,7 @@ impl StreamProcessor {
             let msg_send = SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning));
             if self.show_reasoning_mode == "draft" {
                 let msg_id = msg_send.send().await;
-                clear_up(msg_id, msg_id, 5);
+                clear_up(msg_id, 5);
             } else {
                 _ = msg_send.fold().send().await;
             }
