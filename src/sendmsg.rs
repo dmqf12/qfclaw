@@ -119,9 +119,9 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
     Ok(true)
 }
 
-pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<Vec<u64>> {
+pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
     let client = Client::new();
-    let mut msg_id: Vec<u64> = vec![99999999];
+    let mut msg_id = 99999999;
     let body = json!({
         "chat_id": *ALLOW_ID,
         "text": text,
@@ -139,7 +139,7 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<Vec<u64>>
             println!("重新发送❌❌");
         } else {
             println!("ok: true, result: true");
-            msg_id.push(status["result"]["message_id"].as_u64().unwrap_or_default());
+            msg_id = status["result"]["message_id"].as_u64().unwrap_or_default();
             break;
         }
     }
