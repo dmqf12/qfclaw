@@ -2,11 +2,11 @@ use serde_json:: { json, Value };
 use anyhow::{ anyhow, Result };
 
 
-pub fn _print_json(value: &Value) {
+pub fn print_json(value: &Value) {
     println!("{}", serde_json::to_string_pretty(value).unwrap())
 }
 
-pub fn _read_json(file: &str, key: &str) -> Result<Value> {
+pub fn read_json(file: &str, key: &str) -> Result<Value> {
     let file = match std::fs::File::open(file) {
         Ok(resp) => resp,
         Err(e) => return Err(anyhow!(e))
@@ -22,7 +22,7 @@ pub fn _read_json(file: &str, key: &str) -> Result<Value> {
     }
 }
 
-pub fn _file_to_json(file: &str) -> Result<Value> {
+pub fn file_to_json(file: &str) -> Result<Value> {
     let file = match std::fs::File::open(file) {
         Ok(resp) => resp,
         Err(e) => return Err(anyhow!(e))

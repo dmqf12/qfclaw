@@ -6,6 +6,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::{Value, json};
+use crate::qffunc;
 
 fn escape_markdown_v2(cmd: &str) -> String {
     let specials = [
@@ -37,9 +38,6 @@ fn markdownv2_fold(text: &str) -> String {
     fold_text
 }
 
-pub fn print_json(value: &Value) {
-    println!("{}", serde_json::to_string_pretty(value).unwrap())
-}
 
 pub static BOT_TOKEN: Lazy<String> = Lazy::new(|| {
     fs::read_to_string("config/bot.json")
@@ -72,7 +70,7 @@ fn get_callback_data(msg: &Value) -> (String, String, u64) {
     let msg_id = msg["callback_query"]["message"]["message_id"]
         .as_u64()
         .unwrap_or(9999999);
-    print_json(msg);
+    qffunc::print_json(msg);
     (callback_id.to_string(), data.to_string(), msg_id)
 }
 

@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 //  fn deal_file(msg: Value)
 fn get_msg(msg: &Value) -> (String, i64) {
-    print_json(&msg);
+    qffunc::print_json(&msg);
     let text = msg["message"]["text"].as_str().unwrap_or("").to_string();
     let chat_id = msg["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_ID);
     (text, chat_id)

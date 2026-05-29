@@ -7,10 +7,10 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::sendmsg::*;
 use crate::toolcall::*;
-
+use crate::qffunc;
 
 fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
-    print_json(chat_result);
+    qffunc::print_json(chat_result);
     let content = chat_result["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or_default();
@@ -48,7 +48,7 @@ async fn chat(
 
     if !response.status().is_success() {
         let error_json: Value = response.json().await.context("请求失败")?;
-        print_json(&error_json);
+        qffunc::print_json(&error_json);
         let error_message = error_json["error"]["message"]
             .as_str()
             .unwrap_or("请求失败");
@@ -78,10 +78,10 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
     let messages_path = "messages/";
     fs::create_dir_all(&messages_path)?; // 已存在时不会报错
     let msg_file = format!("{}/messages.json", &messages_path);
-    let mut messages: Vec<Value> = fs::File::open(&msg_file)
-        .ok()
-        .and_then(|file| serde_json::from_reader(file).ok())
-        .unwrap_or_else(|| vec![]);
+    let mut messages: Vec<Value> =  match qffunc::file_to_json(&msg_file) {
+        Ok(resp) => resp.as_array().cloned().unwrap_or_default(),
+        Err(_) => vec![],
+    };
 
     let system_prompt = build_system_prompt();
     messages.insert(0, json!({"role": "system", "content": &system_prompt}));
@@ -89,23 +89,22 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
     //  获取模型配置信息
     let mut model_config = json!(null);
     let mut model: Value = json!(null);
-    if let Ok(model_file) = fs::File::open("config/models.json") {
-        let model_list: Value = match serde_json::from_reader(model_file) {
-            Ok(resp) => resp,
-            Err(e) => return Err(anyhow!("model.json解析失败: {}", e)),
-        };
-        let model_name = model_list["use_model"].as_str().unwrap_or_default();
-        model_config = model_list
-            .get("config")
-            .ok_or_else(|| anyhow!("models.json解析失败"))?
-            .clone();
-        model = model_list
-            .get(model_name)
-            .ok_or_else(|| anyhow!("models.json解析失败"))?
-            .clone();
-    }
+    match qffunc::file_to_json("config/models.json") {
+        Ok(resp) => {
+            let model_name = resp["use_model"].as_str().unwrap_or_default();
+            model_config = resp
+                .get("config")
+                .ok_or_else(|| anyhow!("models.json解析失败"))?
+                .clone();
+            model = resp
+                .get(model_name)
+                .ok_or_else(|| anyhow!("models.json解析失败"))?
+                .clone();
+        }
+        Err(e) => return Err(anyhow!("model.json解析失败: {}", e)),
+    };
     if model.is_null() {
-        return Err(anyhow!("models.json解析失败或不存在"));
+        return Err(anyhow!("模型信息不存在"));
     }
 
     let api_key = model["token"].as_str().unwrap_or_default();
@@ -114,18 +113,15 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
         .unwrap_or("https://api.deepseek.com/v1");
     let model_name = model["model_name"].as_str().unwrap_or_default();
     let stream: bool = model_config["stream"].as_bool().unwrap_or(true);
-    let mut show_reasoning_mode = model_config["reasoning"].as_str().unwrap_or("enabled");
-    let mut reasoning = "";
-    if show_reasoning_mode.contains("draft") {
-        reasoning = show_reasoning_mode.split('_').last().unwrap();
+    let mut show_reasoning_mode = model_config["reasoning"].as_str().unwrap_or("disabled");
+    let reasoning: &str;
+    if show_reasoning_mode.contains("_") {
+        let parts: Vec<&str> = show_reasoning_mode.split('_').collect();
+        reasoning = parts.last().unwrap();
+        show_reasoning_mode = parts.first().unwrap();
+    } else {
         show_reasoning_mode = "draft";
-    }
-    if show_reasoning_mode.contains("fold") {
-        reasoning = show_reasoning_mode.split('_').last().unwrap();
-        show_reasoning_mode = "fold";
-    }
-    if reasoning.is_empty() {
-        reasoning = show_reasoning_mode;
+        reasoning = "disabled";
     }
     messages.push(json!({"role": "user", "content": user_input}));
 

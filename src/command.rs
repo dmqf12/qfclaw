@@ -7,7 +7,7 @@ use chrono::Local;
 use serde_json::{Value, json};
 //use reqwest::Client;
 //use aichat;
-use crate::sendmsg::*;
+use crate::{qffunc, sendmsg::*};
 
 fn date_now() -> String {
     let ts = SystemTime::now()
@@ -70,11 +70,14 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
 
     if cmd_text == "/clear" {
         let message_id = SendMessage::new("🧹Clear up immediately").send().await;
-        let session: Value = fs::File::open(session_file)
-            .ok()
-            .and_then(|file| serde_json::from_reader(file).ok())
-            .unwrap_or_default();
-        if let Some(last_session_id) = session["last_session_start"].as_u64() {
+        let last_session_id = match qffunc::read_json(session_file, "last_session_start") {
+            Ok(resp) => resp,
+            Err(e) => {
+                SendMessage::new(&e.to_string()).send().await;
+                return Err(e)
+            }
+        };
+        if let Some(last_session_id) = last_session_id.as_u64() {
             _ = Box::pin(exec_cmd("/mv_session clear", msg)).await;
             clear_up((last_session_id..=message_id[0]).collect(), 0, true);
         } else {
