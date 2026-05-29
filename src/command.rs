@@ -17,69 +17,6 @@ fn date_now() -> String {
     format!("{}-{}", Local::now().date_naive(), ts)
 }
 
-/*
-async fn retry(text: &str, msg: &Value) {
-    let messages: Vec<serde_json::Value> = fs::File::open("messages/messages.json")
-        .ok()
-        .and_then(|file| serde_json::from_reader(file).ok())
-        .unwrap_or_else(|| vec![]);
-    if messages.is_empty() {
-        let _ = SendMessage::new("❓当前会话找不到此消息").send().await;
-        return;
-    }
-    let reply_msg_id = msg["message"]["reply_to_message"]["message_id"]
-        .as_u64()
-        .unwrap_or_default();
-    let reply_msg_text = msg["message"]["reply_to_message"]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .replace("\nMarkdown解析失败", "")
-        .replacen("/retry", "", 1)
-        .trim_start()
-        .to_string();
-
-    let msg_id = msg["message"]["message_id"].as_u64().unwrap_or_default();
-
-    if reply_msg_text.is_empty() {
-        clear_up(msg_id - 1, msg_id, 0);
-        let _ = fs::create_dir_all("messages");
-        for (i, message) in messages.iter().enumerate().rev() {
-            if let Some(role) = message["role"].as_str() {
-                if role == "user" {
-                    if let Ok(file) = fs::File::create("messages/messages.json") {
-                        let _ = serde_json::to_writer_pretty(file, &messages[..i + 1]);
-                        let user_text = messages[i]["content"].as_str().unwrap_or_default();
-                        let _ = aichat::main(&user_text).await;
-                    }
-                }
-            }
-        }
-        return;
-    }
-    for (i, message) in messages.iter().enumerate() {
-        let msg_text = message["content"].as_str().unwrap_or_default();
-        let role = message["role"].as_str().unwrap_or_default();
-        if msg_text == reply_msg_text {
-            let _ = fs::create_dir_all("messages");
-            if let Ok(file) = fs::File::create("messages/messages.json") {
-                if role == "user" {
-                    let _ = serde_json::to_writer_pretty(file, &messages[..i]);
-                    if text.len() > 6 {
-                        clear_up(reply_msg_id, msg_id - 1, 0);
-                        let _ = aichat::main(&text.replacen("/retry", "", 1).trim_start()).await;
-                    } else {
-                        clear_up(reply_msg_id + 1, msg_id, 0);
-                        let _ = aichat::main(&msg_text).await;
-                    }
-                    return;
-                }
-            }
-        }
-    }
-    let _ = SendMessage::new("❓当前会话找不到此消息").send().await;
-    return;
-}
-*/
 pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
     let session_file = "messages/session.json";
 
@@ -109,10 +46,6 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
             Err(_) => return Ok(false),
         };
     }
-    if cmd_text.contains("/retry") {
-        println!("/retry");
-        //  retry(cmd_text, msg).await
-    }
     if cmd_text == "/status" {
         let session: Value = fs::File::open(session_file)
             .ok()
@@ -132,7 +65,7 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
          let msg_id = send_inline("是否显示推理过程", json!([
             [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}],
             [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await?;
-         clear_up(vec![msg_id], 0);
+         clear_up(vec![ msg_id - 1 ], 0);
     }
 
     if cmd_text == "/clear" {

@@ -52,7 +52,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             continue;
         }
 
-        if ["/new", "/clear", "/restart", "/retry", "/status", "/reasoning"]
+        if ["/new", "/clear", "/restart", "/status", "/reasoning"]
             .iter()
             .any(|&cmd| user_input.as_str().contains(cmd))
         {
@@ -128,7 +128,7 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
 
 #[tokio::main]
 async fn main() {
-    let _ = SendMessage::new("✅启动成功").send().await;
+    _ = SendMessage::new("✅启动成功").send().await;
     let _ = command::exec_cmd("/status", &Value::Null).await;
 
     // 创建通道
