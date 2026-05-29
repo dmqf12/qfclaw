@@ -93,12 +93,12 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
     if text.contains("reasoning") {
         if text.contains("set") {
             if text.contains("draft") {
-                clear_up(vec!(msg_id), 0);
+                clear_up(vec!(msg_id), 0, true);
                 _ = send_inline("请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_draft_enabled"}, {"text": "适应", "callback_data": "reasoning_draft_adaptive"}] ])).await;
             }
             if text.contains("fold") {
-                clear_up(vec!(msg_id), 0);
+                clear_up(vec!(msg_id), 0, true);
                 _ = send_inline("请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
             }
@@ -113,7 +113,7 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         models["config"]["reasoning"] = json!(content);
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
-        clear_up(vec!(msg_id), 0);
+        clear_up(vec!(msg_id), 0, true);
         _ = SendMessage::new("✅操作成功").clear().send().await;
     }
     Ok(true)
@@ -205,18 +205,21 @@ impl SendMessage {
         let client = Client::new();
         let mut failed_times = 0;
         let mut new_text = self.text.clone();
+        let mut send_ok = true;
         loop {
-            if new_text.chars().count() > 4096 {
-                if self.draft.is_empty() {
-                    self.text = unicode_slice(&new_text, 0, 4096);
-                    new_text = unicode_slice(&new_text, 4096, usize::MAX);
+            if send_ok {
+                if new_text.chars().count() > 4096 {
+                    if self.draft.is_empty() {
+                        self.text = unicode_slice(&new_text, 0, 4096);
+                        new_text = unicode_slice(&new_text, 4096, usize::MAX);
+                    } else {
+                        self.text = unicode_slice(&new_text, new_text.chars().count() - 4096, usize::MAX);
+                        new_text = "".to_string();
+                    }
                 } else {
-                    self.text = unicode_slice(&new_text, new_text.chars().count() - 4096, usize::MAX);
+                    self.text = new_text;
                     new_text = "".to_string();
                 }
-            } else {
-                self.text = new_text;
-                new_text = "".to_string();
             }
             let mut body = json!({
             "chat_id": self.id,
@@ -234,7 +237,7 @@ impl SendMessage {
             } else {
                 failed_times = failed_times + 1
             }
-            if failed_times > 2 {
+            if failed_times > 1 {
                 return msg_id
             }
             let status_ok = status["ok"].as_bool().unwrap_or(false);
@@ -247,6 +250,7 @@ impl SendMessage {
                         }
                         println!("{}", status);
                         println!("重新发送❌❌");
+                        send_ok = false;
                     } else if p.to_string().contains("empty") {
                         println!("无法发送空消息❎");
                         break
@@ -259,6 +263,7 @@ impl SendMessage {
                     }
                 }
             } else {
+                send_ok = true;
                 if !self.draft.is_empty() {
                     println!("ok......");
                 } else {
@@ -266,7 +271,7 @@ impl SendMessage {
                 }
                 msg_id.push(status["result"]["message_id"].as_u64().unwrap_or_default());
                 if self.do_clear {
-                    clear_up(msg_id.clone(), 0);
+                    clear_up(msg_id.clone(), 0, true);
                 }
                 if new_text.is_empty() {
                     break
@@ -281,26 +286,36 @@ impl SendMessage {
     }
 }
 
-pub fn clear_up(ids: Vec<u64>, delay_secs: u64) {
+pub fn clear_up(ids: Vec<u64>, delay_secs: u64, should_save: bool) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
         let client = Client::new();
         let mut body = json!({"chat_id": *ALLOW_ID});
-        let mut session: Value = fs::File::open("messages/session.json")
-            .ok()
-            .and_then(|file| serde_json::from_reader(file).ok())
-            .unwrap_or_default();
-        let mut cleared = session["already_cleared"].as_array().unwrap_or(&vec![]).clone();
+        let mut session: Value = if should_save {
+            fs::File::open("messages/session.json")
+                .ok()
+                .and_then(|file| serde_json::from_reader(file).ok())
+                .unwrap_or_default()
+        } else {
+            Value::Null
+        };
+        let mut cleared = if should_save {
+            session["already_cleared"].as_array().unwrap_or(&vec![]).clone()
+        } else {
+            vec![]
+        };
 
         for id in ids.iter().rev() {
             if *id > 9990000 {
                 break;
             }
-            if cleared.contains(&json!(id)) {
+            if should_save && cleared.contains(&json!(id)) {
                 continue;
             }
-            cleared.push(json!(id));
+            if should_save {
+                cleared.push(json!(id));
+            }
             body["message_id"] = json!(id);
             for attempt in 0..2 {
                 match client
@@ -316,9 +331,11 @@ pub fn clear_up(ids: Vec<u64>, delay_secs: u64) {
             }
         }
 
-        session["already_cleared"] = json!(cleared);
-        if let Ok(file) = fs::File::create("messages/session.json") {
-            _ = serde_json::to_writer_pretty(file, &session);
+        if should_save {
+            session["already_cleared"] = json!(cleared);
+            if let Ok(file) = fs::File::create("messages/session.json") {
+                _ = serde_json::to_writer_pretty(file, &session);
+            }
         }
     });
 }

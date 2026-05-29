@@ -1,156 +1,13 @@
 use std::fs;
 
 use anyhow::{Context, Result, anyhow};
-use futures::StreamExt;
-use rand;
 use reqwest::Client;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::sendmsg::*;
 use crate::toolcall::*;
 
-struct StreamProcessor {
-    full_response: String,
-    full_reasoning: String,
-    start_response: bool,
-    tool_calls_map: BTreeMap<u64, (String, String)>,
-    usage: Option<Value>,
-    show_reasoning_mode: String,
-}
-
-impl StreamProcessor {
-    fn new() -> Self {
-        Self {
-            full_response: String::new(),
-            full_reasoning: String::new(),
-            start_response: false,
-            tool_calls_map: BTreeMap::new(),
-            usage: None,
-            show_reasoning_mode: String::new(),
-        }
-    }
-
-    async fn process_chunk(
-        &mut self,
-        chunk: &[u8],
-        show_reasoning_mode: &str,
-    ) -> Result<Option<Value>, anyhow::Error> {
-        self.show_reasoning_mode = show_reasoning_mode.to_string();
-        let text = String::from_utf8_lossy(chunk);
-        for line in text.lines().map(|s| s.trim()) {
-            if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" {
-                    return Ok(self.finalize().await);
-                }
-                let _ = self.process_data_line(data).await;
-            }
-        }
-        Ok(None)
-    }
-
-    async fn process_data_line(&mut self, data: &str) -> Result<(), anyhow::Error> {
-        let mut chunk: Value = json!({});
-        match serde_json::from_str::<Value>(data) {
-            Ok(resp) => chunk = resp,
-            Err(e) => println!("{}---{}", e, data),
-        }
-
-        // 1. 记录 usage
-        if let Some(usage) = chunk.get("usage") {
-            self.usage = Some(usage.clone());
-        }
-
-        // 2. 提取 delta
-        let delta = &chunk["choices"][0]["delta"];
-
-        // 3. 处理 reasoning
-        if let Some(reasoning) = delta["reasoning_content"].as_str() {
-            self.full_reasoning.push_str(reasoning);
-            if !self.start_response && self.full_reasoning.len() % 32 == 0 {
-                tokio::spawn(
-                    SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning))
-                        .is_draft()
-                        .send(),
-                );
-            }
-        }
-
-        // 4. 处理 content
-        if let Some(content) = delta["content"].as_str() {
-            if !self.start_response {
-                self.start_response = true;
-                self.flush_reasoning().await;
-            }
-            self.full_response.push_str(content);
-            if self.full_response.len() % 32 == 0 {
-                tokio::spawn(SendMessage::new(&self.full_response).is_draft().send());
-            }
-        }
-
-        // 5. 处理 tool_calls
-        if let Some(tool_calls) = delta["tool_calls"].as_array() {
-            for tc in tool_calls {
-                if let Some(idx) = tc["index"].as_u64() {
-                    let entry = self.tool_calls_map.entry(idx).or_default();
-                    if let Some(function) = tc.get("function") {
-                        if let Some(name) = function["name"].as_str() {
-                            entry.0.push_str(name);
-                        }
-                        if let Some(args) = function["arguments"].as_str() {
-                            entry.1.push_str(args);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn finalize(&mut self) -> Option<Value> {
-        let mut message = json!({ "role": "assistant" });
-        if !self.full_reasoning.is_empty() {
-            message["reasoning_content"] = json!(self.full_reasoning);
-        }
-        if !self.full_response.is_empty() {
-            message["content"] = json!(self.full_response);
-        }
-
-        if !self.tool_calls_map.is_empty() {
-            message["tool_calls"] = json!(
-                self.tool_calls_map
-                    .iter()
-                    .map(|(idx, (n, a))| {
-                        json!({
-                            "id": format!("call_{}_{}", idx, rand::random::<u32>()),
-                            "type": "function",
-                            "function": { "name": n, "arguments": a }
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            );
-        }
-
-        Some(json!({
-            "choices": [{ "finish_reason": "stop", "message": message }],
-            "usage": self.usage.take().unwrap_or(json!({}))
-        }))
-    }
-
-    async fn flush_reasoning(&self) {
-        if !self.full_reasoning.is_empty() {
-            let msg_send = SendMessage::new(&format!("Reasoning 🧠\n{}", self.full_reasoning));
-            if self.show_reasoning_mode == "draft" {
-                let msg_id = msg_send.send().await;
-                clear_up(msg_id, 5);
-            } else {
-                _ = msg_send.fold().send().await;
-            }
-        }
-    }
-}
 
 fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
     print_json(chat_result);
@@ -178,11 +35,9 @@ async fn chat(
     api_key: &str,
     base_url: &str,
     payload: &Value,
-    show_reasoning_mode: &str,
 ) -> Result<serde_json::Value> {
     let client = Client::new();
     let url = format!("{}/chat/completions", base_url);
-    let stream_out = payload["stream"].as_bool().unwrap_or(true);
     let response = client
         .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
@@ -200,23 +55,8 @@ async fn chat(
         return Err(anyhow!("API 请求失败: {}", error_message));
     }
 
-    if !stream_out {
-        let chat_response: Value = response.json().await?;
-        return Ok(chat_response);
-    } else {
-        let mut processor = StreamProcessor::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.context("读取流失败")?;
-            if let Some(final_value) = processor
-                .process_chunk(&chunk, &show_reasoning_mode)
-                .await?
-            {
-                return Ok(final_value);
-            }
-        }
-        Err(anyhow!("流已结束但未收到完整响应"))
-    }
+    let chat_response: Value = response.json().await?;
+    return Ok(chat_response);
 }
 
 fn build_system_prompt() -> String {
@@ -347,7 +187,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
     tokio::spawn(toolcall(tool_rx)); // 后台任务持续运行，接收请求
 
     loop {
-        let reply: Value = match chat(&api_key, &base_url, &payload, &show_reasoning_mode).await {
+        let reply: Value = match chat(&api_key, &base_url, &payload).await {
             Ok(resp) => resp,
             Err(e) => {
                 let _ = SendMessage::new(&e.to_string()).send().await;
@@ -361,7 +201,14 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
         if !content.is_empty() {
             let _ = SendMessage::new(&content).send().await;
         }
-
+        if !reasoning.is_empty() {
+            if show_reasoning_mode == "draft" {
+                let msg_id = SendMessage::new(&reasoning).send().await;
+                clear_up(msg_id, 5, true);
+            } else {
+                let _msg_id = SendMessage::new(&reasoning).fold().send().await;
+            }
+        }
         if let Ok(new_msg) = rx.try_recv() {
             messages = 截取消息(messages);
             messages.push(json!({"role": "user", "content": new_msg}));
