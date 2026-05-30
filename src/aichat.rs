@@ -246,7 +246,7 @@ pub async fn main(from_id: i64, chat_id: i64, user_input: &str, mut rx: mpsc::Re
             payload["messages"] = Value::Array(messages.clone());
             保存消息(chat_id, &messages)?;
         } else {
-            if chat_id < 0 {
+            if chat_id < 0 && from_id != *ALLOW_USER_ID {
                 let msg_id = MsgBuilder::new(&format!("@{} {}", from_id, content)).id(chat_id).send().await;
                 clear_up(chat_id, msg_id, 0, false);
             }
