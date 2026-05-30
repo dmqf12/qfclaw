@@ -17,8 +17,8 @@ fn date_now() -> String {
     format!("{}-{}", Local::now().date_naive(), ts)
 }
 
-pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
-    let session_file = "messages/session.json";
+pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool> {
+    let session_file = &format!("messages/{}_session.json", chat_id);
 
     if cmd_text.contains("/mv_session") {
         let target_path = cmd_text
@@ -35,11 +35,11 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
     }
     if cmd_text == "/new" {
-        Box::pin(exec_cmd("/mv_session archive", msg)).await?;
+        Box::pin(exec_cmd(chat_id, "/mv_session archive", msg)).await?;
     }
     if cmd_text == "/restart" {
         let msg_id = MsgBuilder::new("🔄重启中").send().await;
-        clear_up(((msg_id[0] - 1)..=msg_id[0]).collect(), 0, true);
+        clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 0, true);
         tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
         match Command::new("bash").arg("-c").arg("systemctl --user restart qfclaw").output() {
             Ok(_) => return Ok(true),
@@ -59,13 +59,13 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
         ))
         .send()
         .await;
-        clear_up(((msg_id[0] - 1)..=msg_id[0]).collect(), 5, true);
+        clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 5, true);
     }
     if cmd_text == "/reasoning" {
-         let msg_id = send_inline("是否显示推理过程", json!([
+         let msg_id = send_inline(chat_id, "是否显示推理过程", json!([
             [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}],
             [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await?;
-         clear_up(vec![ msg_id - 1 ], 0, true);
+         clear_up(chat_id, vec![ msg_id - 1 ], 0, true);
     }
 
     if cmd_text == "/clear" {
@@ -78,8 +78,8 @@ pub async fn exec_cmd(cmd_text: &str, msg: &Value) -> Result<bool> {
             }
         };
         if let Some(last_session_id) = last_session_id.as_u64() {
-            _ = Box::pin(exec_cmd("/mv_session clear", msg)).await;
-            clear_up((last_session_id..=message_id[0]).collect(), 0, true);
+            _ = Box::pin(exec_cmd(chat_id, "/mv_session clear", msg)).await;
+            clear_up(chat_id, (last_session_id..=message_id[0]).collect(), 0, true);
         } else {
             MsgBuilder::new("🧹当前无session可清理").send().await;
         }

@@ -93,18 +93,18 @@ async fn reply_callback(callback_id: &str) {
         return;
     }
 }
-pub async fn deal_callback(msg: &Value) -> Result<bool> {
+pub async fn deal_callback(chat_id: i64, msg: &Value) -> Result<bool> {
     let (callback_id, text, msg_id) = get_callback_data(msg);
     if text.contains("reasoning") {
         if text.contains("set") {
             if text.contains("draft") {
-                clear_up(vec!(msg_id), 0, true);
-                _ = send_inline("请选择推理模式", json!([
+                clear_up(chat_id, vec!(msg_id), 0, true);
+                _ = send_inline(chat_id, "请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_draft_enabled"}, {"text": "适应", "callback_data": "reasoning_draft_adaptive"}] ])).await;
             }
             if text.contains("fold") {
-                clear_up(vec!(msg_id), 0, true);
-                _ = send_inline("请选择推理模式", json!([
+                clear_up(chat_id, vec!(msg_id), 0, true);
+                _ = send_inline(chat_id, "请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
             }
             return Ok(true);
@@ -118,17 +118,17 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         models["config"]["reasoning"] = json!(content);
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
-        clear_up(vec!(msg_id), 0, true);
+        clear_up(chat_id, vec!(msg_id), 0, true);
         _ = MsgBuilder::new("✅操作成功").clear().send().await;
     }
     Ok(true)
 }
 
-pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
+pub async fn send_inline(chat_id: i64, text: &str, inline_keyboard: Value) -> Result<u64> {
     let client = Client::new();
     let mut msg_id = 9999999;
     let body = json!({
-        "chat_id": *ALLOW_USER_ID,
+        "chat_id": chat_id,
         "text": text,
         "reply_markup": { "inline_keyboard": inline_keyboard } });
     for _i in 1..3 {
@@ -276,7 +276,7 @@ impl MsgBuilder {
                 }
                 msg_id.push(status["result"]["message_id"].as_u64().unwrap_or_default());
                 if self.do_clear {
-                    clear_up(msg_id.clone(), 0, true);
+                    clear_up(self.id, msg_id.clone(), 0, true);
                 }
                 if new_text.is_empty() {
                     break
@@ -291,14 +291,14 @@ impl MsgBuilder {
     }
 }
 
-pub fn clear_up(ids: Vec<u64>, delay_secs: u64, should_save: bool) {
+pub fn clear_up(chat_id: i64, ids: Vec<u64>, delay_secs: u64, should_save: bool) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
         let client = Client::new();
-        let mut body = json!({"chat_id": *ALLOW_USER_ID});
+        let mut body = json!({"chat_id": chat_id});
         let mut session: Value = if should_save {
-            fs::File::open("messages/session.json")
+            fs::File::open(format!("messages/{}_session.json", chat_id))
                 .ok()
                 .and_then(|file| serde_json::from_reader(file).ok())
                 .unwrap_or_default()
@@ -338,7 +338,7 @@ pub fn clear_up(ids: Vec<u64>, delay_secs: u64, should_save: bool) {
 
         if should_save {
             session["already_cleared"] = json!(cleared);
-            if let Ok(file) = fs::File::create("messages/session.json") {
+            if let Ok(file) = fs::File::create(format!("messages/{}_session.json", chat_id)) {
                 _ = serde_json::to_writer_pretty(file, &session);
             }
         }

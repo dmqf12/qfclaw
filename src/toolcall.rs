@@ -78,7 +78,7 @@ async fn notify(chat_id: i64, msg: &str, clear: bool) {
     println!("{}", msg);
     let msg_id = MsgBuilder::new(msg).id(chat_id).fold().send().await;
     if clear {
-        clear_up(msg_id, 5, true);
+        clear_up(chat_id, msg_id, 5, true);
     }
 }
 
@@ -166,7 +166,7 @@ async fn exec(chat_id: i64, params: Value) -> String {
         }
     };
 
-    clear_up(msg_id, 3, true);
+    clear_up(chat_id, msg_id, 3, true);
     res_text
 }
 

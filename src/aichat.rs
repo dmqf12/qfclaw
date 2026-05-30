@@ -69,7 +69,7 @@ fn build_system_prompt() -> String {
         .join("\n")
 }
 
-fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)> {
+fn init(chat_id: i64, user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)> {
     println!("{}", user_input);
     if user_input.is_empty() {
         return Err(anyhow!("空消息"));
@@ -77,7 +77,7 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
     //  检查对话记录
     let messages_path = "messages/";
     fs::create_dir_all(&messages_path)?; // 已存在时不会报错
-    let msg_file = format!("{}/messages.json", &messages_path);
+    let msg_file = format!("{}/{}_messages.json", &messages_path, chat_id);
     let mut messages: Vec<Value> =  match qffunc::file_to_json(&msg_file) {
         Ok(resp) => resp.as_array().cloned().unwrap_or_default(),
         Err(_) => vec![],
@@ -148,8 +148,8 @@ fn init(user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)>
     ));
 }
 
-fn 记录token(total_tokens: u64) -> Result<()> {
-    let session_file = "messages/session.json";
+fn 记录token(chat_id: i64, total_tokens: u64) -> Result<()> {
+    let session_file = &format!("messages/{}_session.json", chat_id);
     let mut session: Value = fs::File::open(session_file)
         .ok()
         .and_then(|file| serde_json::from_reader(file).ok())
@@ -158,8 +158,8 @@ fn 记录token(total_tokens: u64) -> Result<()> {
     serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
     Ok(())
 }
-fn 保存消息(messages: &Vec<Value>) -> Result<()> {
-    let msg_file = "messages/messages.json";
+fn 保存消息(chat_id: i64, messages: &Vec<Value>) -> Result<()> {
+    let msg_file = format!("messages/{}_messages.json", chat_id);
     serde_json::to_writer_pretty(
         fs::File::create(format!("{}.tmp", msg_file))?,
         &messages[1..],
@@ -176,7 +176,7 @@ fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
 }
 
 pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
-    let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(user_input)?;
+    let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(chat_id, user_input)?;
 
     // --- 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
     let (tool_tx, tool_rx) = mpsc::channel::<ToolRequest>(32);
@@ -192,12 +192,12 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
         };
 
         let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
-        记录token(total_tokens)?;
+        记录token(chat_id, total_tokens)?;
 
         if !reasoning.is_empty() {
             if show_reasoning_mode == "draft" {
                 let msg_id = MsgBuilder::new(&format!("_🧠Reasoning: {}_", escape_markdown_v2(&reasoning))).id(chat_id).parse("MarkdownV2").send().await;
-                clear_up(msg_id, 3, true);
+                clear_up(chat_id, msg_id, 3, true);
             } else {
                 let _msg_id = MsgBuilder::new(&format!("🧠Reasoning: {}", reasoning)).id(chat_id).fold().send().await;
             }
@@ -212,7 +212,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
             messages.push(json!({"role": "user", "content": new_msg}));
             println!("打断❓");
             payload["messages"] = Value::Array(messages.clone());
-            保存消息(&messages)?;
+            保存消息(chat_id, &messages)?;
             continue;
         }
         if let Some(arr) = tool_calls.as_array()
@@ -244,13 +244,13 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
 
             messages.extend(tool_calls_result.as_array().unwrap().clone());
             payload["messages"] = Value::Array(messages.clone());
-            保存消息(&messages)?;
+            保存消息(chat_id, &messages)?;
         } else {
             messages.push(
                 json!({"role": "assistant", "content": content, "reasoning_content": reasoning}),
             );
             payload["messages"] = Value::Array(messages.clone());
-            保存消息(&messages)?;
+            保存消息(chat_id, &messages)?;
             break;
         }
     }

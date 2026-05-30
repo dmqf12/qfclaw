@@ -49,7 +49,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             }
         }
         if payload.get("callback_query").is_some() {
-            if let Err(e) = deal_callback(&payload).await {
+            if let Err(e) = deal_callback(chat_id, &payload).await {
                 println!("{}", e.to_string())
             }
             continue;
@@ -64,7 +64,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
                 _ = MsgBuilder::new("🛑 任务已停止").send().await;
             } else {
                 let msg_id = MsgBuilder::new("⚠️ 当前没有正在运行的任务").send().await;
-                clear_up(((msg_id[0] - 1)..=msg_id[0]).collect(), 3, true);
+                clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 3, true);
             }
             continue;
         }
@@ -74,7 +74,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             .any(|&cmd| user_input.as_str().contains(cmd))
         {
             tokio::spawn(async move {
-                if let Err(_) = command::exec_cmd(&user_input, &payload).await {
+                if let Err(_) = command::exec_cmd(chat_id, &user_input, &payload).await {
                     _ = MsgBuilder::new("❌指令执行失败").send().await;
                 }
             });
