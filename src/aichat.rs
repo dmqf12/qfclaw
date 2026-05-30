@@ -175,7 +175,7 @@ fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
     messages
 }
 
-pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
+pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
     let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(user_input)?;
 
     // --- 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
@@ -186,7 +186,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
         let reply: Value = match chat(&api_key, &base_url, &payload).await {
             Ok(resp) => resp,
             Err(e) => {
-                let _ = MsgBuilder::new(&e.to_string()).send().await;
+                let _ = MsgBuilder::new(&e.to_string()).id(chat_id).send().await;
                 break;
             }
         };
@@ -196,15 +196,15 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
 
         if !reasoning.is_empty() {
             if show_reasoning_mode == "draft" {
-                let msg_id = MsgBuilder::new(&format!("_🧠Reasoning: {}_", escape_markdown_v2(&reasoning))).parse("MarkdownV2").send().await;
+                let msg_id = MsgBuilder::new(&format!("_🧠Reasoning: {}_", escape_markdown_v2(&reasoning))).id(chat_id).parse("MarkdownV2").send().await;
                 clear_up(msg_id, 3, true);
             } else {
-                let _msg_id = MsgBuilder::new(&format!("🧠Reasoning: {}", reasoning)).fold().send().await;
+                let _msg_id = MsgBuilder::new(&format!("🧠Reasoning: {}", reasoning)).id(chat_id).fold().send().await;
             }
         }
 
         if !content.is_empty() {
-            let _ = MsgBuilder::new(&content).send().await;
+            let _ = MsgBuilder::new(&content).id(chat_id).send().await;
         }
 
         if let Ok(new_msg) = rx.try_recv() {
@@ -225,6 +225,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
 
             let request = ToolRequest {
                 payload: tool_calls,
+                chat_id: chat_id,
                 resp_tx: tx_feedback, // 把 oneshot 的发送端传给任务
             };
 

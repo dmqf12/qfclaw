@@ -1,5 +1,8 @@
-{   
+{
     "token": "",
-    "allow_id": 0,
+    "bot_id": 0,
+    "allow_user_id": 0,
+    "allow_group_id": 0,
+    "active_accept_group_msg": false,
     "base_url": "https://api.telegram.org/bot"
 }

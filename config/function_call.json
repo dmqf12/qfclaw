@@ -16,6 +16,21 @@
     }
   },
   {
+    "type": "function",
+    "function": {
+      "name": "call_bot",
+      "description": "在群组内调用其他机器人",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "integer", "description": "要调用的机器人的id" },
+          "text": { "type": "string", "description": "文本内容" }
+        },
+        "required": ["bot_id", "text"]
+      }
+    }
+  },
+  {
   "type": "function",
     "function": {
       "name": "exec",
@@ -24,8 +39,8 @@
         "type": "object",
         "properties": {
           "command": { "type": "string", "description": "要执行的命令" },
-          "timeout": { 
-            "type": "integer", 
+          "timeout": {
+            "type": "integer",
             "description": "最大等待时长（秒），默认 10。超过此时间则返回 task_id 并转后台。",
             "default": 10
           }
@@ -42,14 +57,14 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { 
-            "type": "string", 
-            "description": "exec 函数返回的任务唯一标识符。" 
+          "task_id": {
+            "type": "string",
+            "description": "exec 函数返回的任务唯一标识符。"
           },
-          "order": { 
-            "type": "string", 
+          "order": {
+            "type": "string",
             "enum": ["check", "kill"],
-            "description": "操作类型：'check' 用于获取当前输出日志；'kill' 用于立即停止该任务。" 
+            "description": "操作类型：'check' 用于获取当前输出日志；'kill' 用于立即停止该任务。"
           }
         },
         "required": ["task_id", "order"]

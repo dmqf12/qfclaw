@@ -7,12 +7,14 @@ use serde_json::{Value};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+
 //  fn deal_file(msg: Value)
-fn get_msg(msg: &Value) -> (String, i64) {
+fn get_msg(msg: &Value) -> (String, i64, i64) {
     qffunc::print_json(&msg);
     let text = msg["message"]["text"].as_str().unwrap_or("").to_string();
-    let chat_id = msg["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_ID);
-    (text, chat_id)
+    let chat_id = msg["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_USER_ID);
+    let from_id = msg["message"]["from"]["id"].as_i64().unwrap_or(*ALLOW_USER_ID);
+    (text, chat_id, from_id)
 }
 
 async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
@@ -20,9 +22,16 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
     let mut current_task: Option<(tokio::task::JoinHandle<()>, mpsc::Sender<String>)> = None;
 
     while let Some(payload) = rx.recv().await {
-        let (user_input, chat_id) = get_msg(&payload);
-        let allow_list: [i64; 1] = [*ALLOW_ID];
-
+        let (mut user_input, chat_id, from_id) = get_msg(&payload);
+        let allow_list: [i64; 2] = [*ALLOW_USER_ID, *ALLOW_GROUP_ID];
+        let active_accept_group_msg = match qffunc::read_json("config/bot.json", "active_accept_group_msg") {
+            Ok(resp) => resp.as_bool().unwrap_or(false),
+            Err(_) => false,
+        };
+        let bot_id = match qffunc::read_json("config/bot.json", "bot_id") {
+            Ok(resp) => resp.as_i64().unwrap_or(0),
+            Err(_) => 0,
+        };
         if !allow_list.contains(&chat_id) {
             _ = MsgBuilder::new(&format!("不在白名单，您的id：\n      {}", chat_id))
                 .id(chat_id)
@@ -30,7 +39,15 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
                 .await;
             continue;
         }
-
+        if active_accept_group_msg {
+            if from_id != *ALLOW_USER_ID {
+                user_input = format!("{}: \n{}", from_id, user_input);
+            }
+        } else {
+            if !user_input.contains(&bot_id.to_string()) {
+                continue;
+            }
+        }
         if payload.get("callback_query").is_some() {
             if let Err(e) = deal_callback(&payload).await {
                 println!("{}", e.to_string())
@@ -79,7 +96,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             let first_input = user_input.clone();
             let handle = tokio::spawn(async move {
                 // 假设 aichat::main 现在接收 rx_chat
-                if let Err(e) = aichat::main(&first_input, rx_chat).await {
+                if let Err(e) = aichat::main(chat_id, &first_input, rx_chat).await {
                     _ = MsgBuilder::new(&e.to_string()).send().await;
                 }
             });

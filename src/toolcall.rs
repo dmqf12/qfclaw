@@ -12,7 +12,6 @@ use tokio::sync::{oneshot};
 use crate::send::*;
 
 async fn read(file: &str) -> String {
-    notify(&format!("🔧读取：{}", file), true).await;
     match fs::read_to_string(file) {
         Ok(s) => s.trim().to_string(),
         Err(e) => format!("无法读取文件 {}: {}", file, e),
@@ -20,16 +19,13 @@ async fn read(file: &str) -> String {
 }
 
 async fn write(file: &str, text: &str) -> String {
-    notify(&format!("✏️写入：{}", file), true).await;
     match fs::write(file, text) {
         Ok(_) => format!("写入成功: {}", file),
         Err(e) => format!("写入失败 {}: {}", file, e),
     }
 }
 
-
 async fn delete(file: &str) -> String {
-    notify(&format!("🗑️删除：{}", file), true).await;
     match fs::remove_file(file) {
         Ok(_) => format!("✅删除成功: {}", file),
         Err(e) => format!("❌删除失败 {}: {}", file, e),
@@ -37,26 +33,34 @@ async fn delete(file: &str) -> String {
 }
 
 
-
-async fn operate_file(parame: &Value) -> String {
+async fn operate_file(chat_id: i64, parame: &Value) -> String {
     let file = parame["file"].as_str().unwrap_or("");
     let operation = parame["operation"].as_str().unwrap_or("");
     if operation == "write" {
+        notify(chat_id, &format!("✏️写入：{}", file), true).await;
         let text = parame["content"].as_str().unwrap_or("");
         return write(file, text).await
     }
     if operation == "delete" {
+        notify(chat_id, &format!("🗑️删除：{}", file), true).await;
         return delete(file).await
     }
     if operation == "read" {
+        notify(chat_id, &format!("🔧读取：{}", file), true).await;
         return read(file).await
     }
     String::new()
 }
 
+async fn call_bot(chat_id: i64, args: &Value) -> String {
+    let text = args["text"].as_str().unwrap_or("NONE");
+    _ = MsgBuilder::new(&format!("[{}](tg://user?id={} {}", chat_id, chat_id, escape_markdown_v2(text))).id(chat_id).send().await;
+    "提交成功，将在完成后回复".to_string()
+}
 
 pub struct ToolRequest {
     pub payload: Value,
+    pub chat_id: i64,
     pub resp_tx: oneshot::Sender<Value>,
 }
 
@@ -70,9 +74,9 @@ lazy_static::lazy_static! {
 }
 
 
-async fn notify(msg: &str, clear: bool) {
+async fn notify(chat_id: i64, msg: &str, clear: bool) {
     println!("{}", msg);
-    let msg_id = MsgBuilder::new(msg).fold().send().await;
+    let msg_id = MsgBuilder::new(msg).id(chat_id).fold().send().await;
     if clear {
         clear_up(msg_id, 5, true);
     }
@@ -81,7 +85,7 @@ async fn notify(msg: &str, clear: bool) {
 
 
 
-async fn exec(params: Value) -> String {
+async fn exec(chat_id: i64, params: Value) -> String {
     let cmd_text = params["command"].as_str().unwrap_or("");
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
@@ -89,7 +93,7 @@ async fn exec(params: Value) -> String {
 
     // 1. 发送初始消息
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
-    let msg_id = MsgBuilder::new(&start_msg).fold().send().await;
+    let msg_id = MsgBuilder::new(&start_msg).id(chat_id).fold().send().await;
 
     // 2. 环境准备 (改为等待 status 确保完成，而不是 sleep)
     let _ = Command::new("mkdir").args(["-p", &task_dir]).status().await;
@@ -157,7 +161,7 @@ async fn exec(params: Value) -> String {
             );
             let current_log = output_buf.lock().await.clone();
             let msg = format!("⏳任务超时转入后台，ID: {}", task_id);
-            notify(&msg, true).await;
+            notify(chat_id, &msg, true).await;
             format!("{}\n当前输出:\n{}", msg, current_log)
         }
     };
@@ -167,10 +171,10 @@ async fn exec(params: Value) -> String {
 }
 
 
-async fn operate_task(params: Value) -> String {
+async fn operate_task(chat_id: i64, params: Value) -> String {
     let task_id = params["task_id"].as_str().unwrap_or("");
     let order = params["order"].as_str().unwrap_or("check");
-    notify(&format!("👌🏻查询：{}", task_id), true).await;
+    notify(chat_id, &format!("👌🏻查询：{}", task_id), true).await;
     let mut tasks = TASKS.lock().await;
     let task = match tasks.get_mut(task_id) {
         Some(t) => t,
@@ -182,7 +186,7 @@ async fn operate_task(params: Value) -> String {
             let _ = task.child.kill().await;
             tasks.remove(task_id);
             let msg = format!("🛑 终止任务：{}", task_id);
-            notify(&msg, true).await;
+            notify(chat_id, &msg, true).await;
             msg
         }
         "check" => {
@@ -198,6 +202,7 @@ async fn operate_task(params: Value) -> String {
 pub async fn toolcall(mut rx: tokio::sync::mpsc::Receiver<ToolRequest>) {
     while let Some(req) = rx.recv().await {
         let mut results = Vec::new();
+        let chat_id = req.chat_id;
         if let Some(array) = req.payload.as_array() {
             for element in array {
                 let name = element["function"]["name"].as_str().unwrap_or_default();
@@ -207,9 +212,10 @@ pub async fn toolcall(mut rx: tokio::sync::mpsc::Receiver<ToolRequest>) {
                 ).unwrap_or(json!({}));
 
                 let run_result = match name {
-                    "exec" => exec(args).await,
-                    "operate_task" => operate_task(args).await,
-                    _ => operate_file(&args).await,
+                    "exec" => exec(chat_id, args).await,
+                    "operate_task" => operate_task(chat_id, args).await,
+                    "operate_file" => operate_file(chat_id, &args).await,
+                    _ => call_bot(chat_id, &args).await,
                 };
 
                 results.push(json!({

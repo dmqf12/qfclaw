@@ -46,11 +46,19 @@ pub static BOT_TOKEN: Lazy<String> = Lazy::new(|| {
         .expect("无法读取 config/bot.json 文件或找不到 'token' 字段")
 });
 
-pub static ALLOW_ID: Lazy<i64> = Lazy::new(|| {
+pub static ALLOW_USER_ID: Lazy<i64> = Lazy::new(|| {
     fs::read_to_string("config/bot.json")
         .ok()
         .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-        .and_then(|json| json["allow_id"].as_i64())
+        .and_then(|json| json["allow_user_id"].as_i64())
+        .unwrap_or(0)
+});
+
+pub static ALLOW_GROUP_ID: Lazy<i64> = Lazy::new(|| {
+    fs::read_to_string("config/bot.json")
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|json| json["allow_group_id"].as_i64())
         .unwrap_or(0)
 });
 
@@ -63,7 +71,7 @@ pub static BOT_BASE_URL: Lazy<String> = Lazy::new(|| {
 });
 
 fn get_callback_data(msg: &Value) -> (String, String, u64) {
-    //  let chat_id = msg["callback_query"]["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_ID);
+    //  let chat_id = msg["callback_query"]["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_USER_ID);
     let data = msg["callback_query"]["data"].as_str().unwrap_or_default();
     let callback_id = msg["callback_query"]["id"].as_str().unwrap_or_default();
     let msg_id = msg["callback_query"]["message"]["message_id"]
@@ -120,7 +128,7 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
     let client = Client::new();
     let mut msg_id = 9999999;
     let body = json!({
-        "chat_id": *ALLOW_ID,
+        "chat_id": *ALLOW_USER_ID,
         "text": text,
         "reply_markup": { "inline_keyboard": inline_keyboard } });
     for _i in 1..3 {
@@ -165,7 +173,7 @@ impl MsgBuilder {
     pub fn new(text: &str) -> Self {
         MsgBuilder {
             text: text.to_string(),
-            id: *ALLOW_ID,
+            id: *ALLOW_USER_ID,
             parse_mode: String::from("Markdown"),
             draft: String::from(""),
             do_clear: false,
@@ -288,7 +296,7 @@ pub fn clear_up(ids: Vec<u64>, delay_secs: u64, should_save: bool) {
         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
         let client = Client::new();
-        let mut body = json!({"chat_id": *ALLOW_ID});
+        let mut body = json!({"chat_id": *ALLOW_USER_ID});
         let mut session: Value = if should_save {
             fs::File::open("messages/session.json")
                 .ok()
