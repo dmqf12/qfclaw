@@ -54,6 +54,10 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             } else {
                 if !user_input.starts_with(allow_prefix) {
                     continue;
+                } else {
+                    if let Some(replace_input) = user_input.strip_prefix(allow_prefix) {
+                        user_input = format!("{}: \n{}", from_id, replace_input);
+                    }
                 }
             }
         }
@@ -70,9 +74,9 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         if user_input == "/stop" {
             if let Some((handle, _)) = current_task.take() {
                 handle.abort();
-                _ = MsgBuilder::new("🛑 任务已停止").send().await;
+                _ = MsgBuilder::new("🛑 任务已停止").id(chat_id).send().await;
             } else {
-                let msg_id = MsgBuilder::new("⚠️ 当前没有正在运行的任务").send().await;
+                let msg_id = MsgBuilder::new("⚠️ 当前没有正在运行的任务").id(chat_id).send().await;
                 clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 3, true);
             }
             continue;
