@@ -39,14 +39,20 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
                 .await;
             continue;
         }
-        if active_accept_group_msg && chat_id < 0 {
-            if from_id != *ALLOW_USER_ID {
+        if  chat_id < 0 {
+            if active_accept_group_msg {
+                if from_id != *ALLOW_USER_ID {
+                    if !user_input.starts_with(&format!("@{}", bot_id)) {
+                        continue;
+                    } else {
+                        if let Some(replace_input) = user_input.strip_prefix(&format!("@{}", bot_id)) {
+                            user_input = format!("{}: \n{}", from_id, replace_input);
+                        }
+                    }
+                }
+            } else {
                 if !user_input.starts_with(&format!("@{}", bot_id)) {
                     continue;
-                } else {
-                    if let Some(replace_input) = user_input.strip_prefix(&format!("@{}", bot_id)) {
-                        user_input = format!("{}: \n{}", from_id, replace_input);
-                    }
                 }
             }
         }
