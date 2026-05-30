@@ -60,8 +60,8 @@ async fn chat(
 }
 
 fn build_system_prompt() -> String {
-    let path = "workspace";
-    let files = ["SOUL.md", "Agent.md", "SKILL.md", "User.md"];
+    let path = "config";
+    let files = ["SOUL.md", "Agent.md", "User.md"];
     files
         .iter()
         .filter_map(|f| fs::read_to_string(format!("{}/{}", path, f)).ok())
@@ -196,7 +196,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
 
         if !reasoning.is_empty() {
             if show_reasoning_mode == "draft" {
-                let msg_id = MsgBuilder::new(&format!("_🧠Reasoning: {}_", reasoning)).parse("MarkdownV2").send().await;
+                let msg_id = MsgBuilder::new(&format!("_🧠Reasoning: {}_", escape_markdown_v2(&reasoning))).parse("MarkdownV2").send().await;
                 clear_up(msg_id, 3, true);
             } else {
                 let _msg_id = MsgBuilder::new(&format!("🧠Reasoning: {}", reasoning)).fold().send().await;

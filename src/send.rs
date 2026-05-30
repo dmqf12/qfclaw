@@ -8,9 +8,9 @@ use reqwest::Client;
 use serde_json::{Value, json};
 use crate::qffunc;
 
-fn escape_markdown_v2(cmd: &str) -> String {
+pub fn escape_markdown_v2(cmd: &str) -> String {
     let specials = [
-        '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!',
+        '_', '*', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!',
         '\\', '$',
     ];
     let mut escaped = String::new();
@@ -126,7 +126,7 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
         "reply_markup": { "inline_keyboard": inline_keyboard } });
     for _i in 1..3 {
         let result = client
-            .post(&format!("{}{}/MsgBuilder", *BOT_BASE_URL, *BOT_TOKEN))
+            .post(&format!("{}{}/SendMessage", *BOT_BASE_URL, *BOT_TOKEN))
             .json(&body)
             .send()
             .await?;
@@ -228,7 +228,7 @@ impl MsgBuilder {
                 body["draft_id"] = json!(1)
             }
             let mut status = json!( { "ok": false } );
-            if let Ok(result) = client.post(&format!("{}{}/MsgBuilder{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await {
+            if let Ok(result) = client.post(&format!("{}{}/SendMessage{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await {
                 if let Ok(resp) = result.json().await {
                     status = resp;
                 }
@@ -236,7 +236,7 @@ impl MsgBuilder {
                 failed_times = failed_times + 1
             }
             if failed_times > 1 {
-                return msg_id
+                return vec![9999999]
             }
             let status_ok = status["ok"].as_bool().unwrap_or(false);
             if !status_ok {
