@@ -19,6 +19,7 @@ fn date_now() -> String {
 
 pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool> {
     let session_file = &format!("messages/{}_session.json", chat_id);
+    let messages_file = &format!("messages/{}_messages.json", chat_id);
 
     if cmd_text.contains("/mv_session") {
         let target_path = cmd_text
@@ -28,7 +29,7 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
             .to_string();
         fs::create_dir_all(format!("messages/{target_path}"))?;
         let target_file = format!("messages/{}/{}.json", target_path, date_now());
-        let _ = fs::rename("messages/messages.json", target_file);
+        let _ = fs::rename(messages_file, target_file);
         let new_msg_id = MsgBuilder::new("✅ New session started").id(chat_id).send().await;
         fs::create_dir_all("messages")?;
         let session = json!({"last_session_start": new_msg_id[0], "total_tokens": 0});
