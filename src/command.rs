@@ -29,7 +29,7 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
         fs::create_dir_all(format!("messages/{target_path}"))?;
         let target_file = format!("messages/{}/{}.json", target_path, date_now());
         let _ = fs::rename("messages/messages.json", target_file);
-        let new_msg_id = MsgBuilder::new("✅ New session started").send().await;
+        let new_msg_id = MsgBuilder::new("✅ New session started").id(chat_id).send().await;
         fs::create_dir_all("messages")?;
         let session = json!({"last_session_start": new_msg_id[0], "total_tokens": 0});
         serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
@@ -38,7 +38,7 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
         Box::pin(exec_cmd(chat_id, "/mv_session archive", msg)).await?;
     }
     if cmd_text == "/restart" {
-        let msg_id = MsgBuilder::new("🔄重启中").send().await;
+        let msg_id = MsgBuilder::new("🔄重启中").id(chat_id).send().await;
         clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 0, true);
         tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
         match Command::new("bash").arg("-c").arg("systemctl --user restart qfclaw").output() {
@@ -57,6 +57,7 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
             n as f64 / 1000.0,
             n as f64 / 10000.
         ))
+        .id(chat_id)
         .send()
         .await;
         clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 5, true);
@@ -69,11 +70,11 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
     }
 
     if cmd_text == "/clear" {
-        let message_id = MsgBuilder::new("🧹Clear up immediately").send().await;
+        let message_id = MsgBuilder::new("🧹Clear up immediately").id(chat_id).send().await;
         let last_session_id = match qffunc::read_json(session_file, "last_session_start") {
             Ok(resp) => resp,
             Err(e) => {
-                MsgBuilder::new(&e.to_string()).send().await;
+                MsgBuilder::new(&e.to_string()).id(chat_id).send().await;
                 return Err(e)
             }
         };
@@ -81,7 +82,7 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
             _ = Box::pin(exec_cmd(chat_id, "/mv_session clear", msg)).await;
             clear_up(chat_id, (last_session_id..=message_id[0]).collect(), 0, true);
         } else {
-            MsgBuilder::new("🧹当前无session可清理").send().await;
+            MsgBuilder::new("🧹当前无session可清理").id(chat_id).send().await;
         }
     }
 

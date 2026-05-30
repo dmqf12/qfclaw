@@ -41,10 +41,16 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         }
         if active_accept_group_msg {
             if from_id != *ALLOW_USER_ID {
-                user_input = format!("{}: \n{}", from_id, user_input);
+                if !user_input.starts_with(&format!("@{}", bot_id)) {
+                    continue;
+                } else {
+                    if let Some(replace_input) = user_input.strip_prefix(&format!("@{}", bot_id)) {
+                        user_input = format!("{}: \n{}", from_id, replace_input);
+                    }
+                }
             }
         } else {
-            if !user_input.contains(&bot_id.to_string()) {
+            if !user_input.starts_with(&format!("@{}", bot_id)) {
                 continue;
             }
         }
@@ -96,7 +102,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             let first_input = user_input.clone();
             let handle = tokio::spawn(async move {
                 // 假设 aichat::main 现在接收 rx_chat
-                if let Err(e) = aichat::main(chat_id, &first_input, rx_chat).await {
+                if let Err(e) = aichat::main(from_id, chat_id, &first_input, rx_chat).await {
                     _ = MsgBuilder::new(&e.to_string()).send().await;
                 }
             });

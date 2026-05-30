@@ -175,7 +175,7 @@ fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
     messages
 }
 
-pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
+pub async fn main(from_id: i64, chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
     let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(chat_id, user_input)?;
 
     // --- 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
@@ -246,6 +246,10 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
             payload["messages"] = Value::Array(messages.clone());
             保存消息(chat_id, &messages)?;
         } else {
+            if chat_id < 0 {
+                let msg_id = MsgBuilder::new(&format!("@{} {}", from_id, content)).id(chat_id).send().await;
+                clear_up(chat_id, msg_id, 0, false);
+            }
             messages.push(
                 json!({"role": "assistant", "content": content, "reasoning_content": reasoning}),
             );

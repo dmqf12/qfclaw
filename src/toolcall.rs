@@ -54,7 +54,8 @@ async fn operate_file(chat_id: i64, parame: &Value) -> String {
 
 async fn call_bot(chat_id: i64, args: &Value) -> String {
     let text = args["text"].as_str().unwrap_or("NONE");
-    _ = MsgBuilder::new(&format!("@{} {}", chat_id, escape_markdown_v2(text))).id(chat_id).send().await;
+    let bot_id = args["text"].as_i64().unwrap_or(0);
+    _ = MsgBuilder::new(&format!("@{} {}", bot_id, escape_markdown_v2(text))).id(chat_id).send().await;
     "提交成功，将在完成后回复".to_string()
 }
 
