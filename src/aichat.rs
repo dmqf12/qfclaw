@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::sendmsg::*;
+use crate::send::*;
 use crate::toolcall::*;
 use crate::qffunc;
 
@@ -186,7 +186,7 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
         let reply: Value = match chat(&api_key, &base_url, &payload).await {
             Ok(resp) => resp,
             Err(e) => {
-                let _ = SendMessage::new(&e.to_string()).send().await;
+                let _ = MsgBuilder::new(&e.to_string()).send().await;
                 break;
             }
         };
@@ -194,17 +194,19 @@ pub async fn main(user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()
         let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
         记录token(total_tokens)?;
 
-        if !content.is_empty() {
-            let _ = SendMessage::new(&content).send().await;
-        }
         if !reasoning.is_empty() {
             if show_reasoning_mode == "draft" {
-                let msg_id = SendMessage::new(&reasoning).send().await;
-                clear_up(msg_id, 5, true);
+                let msg_id = MsgBuilder::new(&format!("_🧠Reasoning: {}_", reasoning)).parse("MarkdownV2").send().await;
+                clear_up(msg_id, 3, true);
             } else {
-                let _msg_id = SendMessage::new(&reasoning).fold().send().await;
+                let _msg_id = MsgBuilder::new(&format!("🧠Reasoning: {}", reasoning)).fold().send().await;
             }
         }
+
+        if !content.is_empty() {
+            let _ = MsgBuilder::new(&content).send().await;
+        }
+
         if let Ok(new_msg) = rx.try_recv() {
             messages = 截取消息(messages);
             messages.push(json!({"role": "user", "content": new_msg}));

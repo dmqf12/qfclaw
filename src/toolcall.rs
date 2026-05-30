@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use uuid::Uuid;
 use tokio::sync::{oneshot};
-use crate::sendmsg::*;
+use crate::send::*;
 
 async fn read(file: &str) -> String {
     notify(&format!("🔧读取：{}", file), true).await;
@@ -72,7 +72,7 @@ lazy_static::lazy_static! {
 
 async fn notify(msg: &str, clear: bool) {
     println!("{}", msg);
-    let msg_id = SendMessage::new(msg).fold().send().await;
+    let msg_id = MsgBuilder::new(msg).fold().send().await;
     if clear {
         clear_up(msg_id, 5, true);
     }
@@ -89,7 +89,7 @@ async fn exec(params: Value) -> String {
 
     // 1. 发送初始消息
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
-    let msg_id = SendMessage::new(&start_msg).fold().send().await;
+    let msg_id = MsgBuilder::new(&start_msg).fold().send().await;
 
     // 2. 环境准备 (改为等待 status 确保完成，而不是 sleep)
     let _ = Command::new("mkdir").args(["-p", &task_dir]).status().await;

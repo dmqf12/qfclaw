@@ -112,7 +112,7 @@ pub async fn deal_callback(msg: &Value) -> Result<bool> {
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
         clear_up(vec!(msg_id), 0, true);
-        _ = SendMessage::new("✅操作成功").clear().send().await;
+        _ = MsgBuilder::new("✅操作成功").clear().send().await;
     }
     Ok(true)
 }
@@ -126,7 +126,7 @@ pub async fn send_inline(text: &str, inline_keyboard: Value) -> Result<u64> {
         "reply_markup": { "inline_keyboard": inline_keyboard } });
     for _i in 1..3 {
         let result = client
-            .post(&format!("{}{}/sendMessage", *BOT_BASE_URL, *BOT_TOKEN))
+            .post(&format!("{}{}/MsgBuilder", *BOT_BASE_URL, *BOT_TOKEN))
             .json(&body)
             .send()
             .await?;
@@ -154,7 +154,7 @@ fn unicode_slice(s: &str, start: usize, end: usize) -> String {
 
 
 
-pub struct SendMessage {
+pub struct MsgBuilder {
     text: String,
     id: i64,
     parse_mode: String,
@@ -162,9 +162,9 @@ pub struct SendMessage {
     do_clear: bool,
 }
 
-impl SendMessage {
+impl MsgBuilder {
     pub fn new(text: &str) -> Self {
-        SendMessage {
+        MsgBuilder {
             text: text.to_string(),
             id: *ALLOW_ID,
             parse_mode: String::from("Markdown"),
@@ -228,7 +228,7 @@ impl SendMessage {
                 body["draft_id"] = json!(1)
             }
             let mut status = json!( { "ok": false } );
-            if let Ok(result) = client.post(&format!("{}{}/sendMessage{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await {
+            if let Ok(result) = client.post(&format!("{}{}/MsgBuilder{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await {
                 if let Ok(resp) = result.json().await {
                     status = resp;
                 }

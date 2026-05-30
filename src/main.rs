@@ -2,8 +2,8 @@ mod aichat;
 mod toolcall;
 mod command;
 mod qffunc;
-pub mod sendmsg;
-use crate::sendmsg::*;
+pub mod send;
+use crate::send::*;
 use serde_json::{Value};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -25,7 +25,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         let allow_list: [i64; 1] = [*ALLOW_ID];
 
         if !allow_list.contains(&chat_id) {
-            _ = SendMessage::new(&format!("不在白名单，您的id：\n      {}", chat_id))
+            _ = MsgBuilder::new(&format!("不在白名单，您的id：\n      {}", chat_id))
                 .id(chat_id)
                 .send()
                 .await;
@@ -45,9 +45,9 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         if user_input == "/stop" {
             if let Some((handle, _)) = current_task.take() {
                 handle.abort();
-                _ = SendMessage::new("🛑 任务已停止").send().await;
+                _ = MsgBuilder::new("🛑 任务已停止").send().await;
             } else {
-                let msg_id = SendMessage::new("⚠️ 当前没有正在运行的任务").send().await;
+                let msg_id = MsgBuilder::new("⚠️ 当前没有正在运行的任务").send().await;
                 clear_up(((msg_id[0] - 1)..=msg_id[0]).collect(), 3, true);
             }
             continue;
@@ -59,7 +59,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         {
             tokio::spawn(async move {
                 if let Err(_) = command::exec_cmd(&user_input, &payload).await {
-                    _ = SendMessage::new("❌指令执行失败").send().await;
+                    _ = MsgBuilder::new("❌指令执行失败").send().await;
                 }
             });
             continue;
@@ -81,7 +81,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             let handle = tokio::spawn(async move {
                 // 假设 aichat::main 现在接收 rx_chat
                 if let Err(e) = aichat::main(&first_input, rx_chat).await {
-                    _ = SendMessage::new(&e.to_string()).send().await;
+                    _ = MsgBuilder::new(&e.to_string()).send().await;
                 }
             });
             current_task = Some((handle, tx));
@@ -129,7 +129,7 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
 
 #[tokio::main]
 async fn main() {
-    _ = SendMessage::new("✅启动成功").send().await;
+    _ = MsgBuilder::new("✅启动成功").send().await;
     let _ = command::exec_cmd("/status", &Value::Null).await;
 
     // 创建通道
