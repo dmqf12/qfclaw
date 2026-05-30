@@ -7,7 +7,7 @@ use chrono::Local;
 use serde_json::{Value, json};
 //use reqwest::Client;
 //use aichat;
-use crate::{qffunc, send::*};
+use crate::send::*;
 
 fn date_now() -> String {
     let ts = SystemTime::now()

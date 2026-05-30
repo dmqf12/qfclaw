@@ -1,7 +1,6 @@
 mod aichat;
 mod toolcall;
 mod command;
-mod qffunc;
 pub mod send;
 use crate::send::*;
 use serde_json::{Value};

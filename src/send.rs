@@ -6,7 +6,6 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::{Value, json};
-use crate::qffunc;
 
 pub fn escape_markdown_v2(cmd: &str) -> String {
     let specials = [
