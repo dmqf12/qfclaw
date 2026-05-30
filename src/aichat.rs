@@ -246,7 +246,11 @@ pub async fn main(from_id: i64, chat_id: i64, user_input: &str, mut rx: mpsc::Re
             payload["messages"] = Value::Array(messages.clone());
             保存消息(chat_id, &messages)?;
         } else {
-            if chat_id < 0 && from_id != *ALLOW_USER_ID {
+            let active_accept_group_msg = match qffunc::read_json("config/bot.json", "active_accept_group_msg") {
+                Ok(resp) => resp.as_bool().unwrap_or(false),
+                Err(_) => false,
+            };
+            if chat_id < 0 && from_id != *ALLOW_USER_ID && !active_accept_group_msg {
                 let msg_id = MsgBuilder::new(&format!("@{} {}", from_id, content)).id(chat_id).send().await;
                 clear_up(chat_id, msg_id, 0, false);
             }
