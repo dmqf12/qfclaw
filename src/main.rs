@@ -146,7 +146,7 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
 #[tokio::main]
 async fn main() {
     _ = MsgBuilder::new("✅启动成功").send().await;
-    let _ = command::exec_cmd("/status", &Value::Null).await;
+    //  let _ = command::exec_cmd("/status", &Value::Null).await;
 
     // 创建通道
     let (tx, rx) = mpsc::channel(32);
