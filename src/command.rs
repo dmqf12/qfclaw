@@ -27,11 +27,10 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
             .last()
             .unwrap_or(cmd_text)
             .to_string();
-        fs::create_dir_all(format!("messages/{target_path}"))?;
+        fs::create_dir_all(format!("messages/{}", target_path))?;
         let target_file = format!("messages/{}/{}.json", target_path, date_now());
         let _ = fs::rename(messages_file, target_file);
         let new_msg_id = MsgBuilder::new("✅ New session started").id(chat_id).send().await;
-        fs::create_dir_all("messages")?;
         let session = json!({"last_session_start": new_msg_id[0], "total_tokens": 0});
         serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
     }
@@ -79,8 +78,8 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
                 return Err(e)
             }
         };
+        Box::pin(exec_cmd(chat_id, "/mv_session clear", msg)).await?;
         if let Some(last_session_id) = last_session_id.as_u64() {
-            _ = Box::pin(exec_cmd(chat_id, "/mv_session clear", msg)).await;
             clear_up(chat_id, (last_session_id..=message_id[0]).collect(), 0, true);
         } else {
             MsgBuilder::new("🧹当前无session可清理").id(chat_id).send().await;

@@ -56,7 +56,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
                     continue;
                 } else {
                     if let Some(replace_input) = user_input.strip_prefix(allow_prefix) {
-                        user_input = format!("{}: \n{}", from_id, replace_input);
+                        user_input = replace_input.trim().to_string();
                     }
                 }
             }

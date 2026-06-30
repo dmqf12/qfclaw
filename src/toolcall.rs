@@ -1,15 +1,18 @@
 use std::fs;
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::Arc;
+
 use tokio::process::{Command, Child};
 use tokio::sync::Mutex;
 use tokio::io::AsyncReadExt;
 use tokio::time::{timeout, Duration};
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::sync::Arc;
 use serde_json::{json, Value};
+//  use anyhow::{ anyhow, Result };
 use uuid::Uuid;
 use tokio::sync::{oneshot};
 use crate::send::*;
+
 
 async fn read(file: &str) -> String {
     match fs::read_to_string(file) {
@@ -101,14 +104,15 @@ async fn exec(chat_id: i64, params: Value) -> String {
 
     // 写入脚本 (注意：sudo 增加绝对路径 /usr/bin/sudo 避免函数递归)
     let qfsudo_content = format!(
-        "tmpfile=$(mktemp {}/XXXXXXXX) && printf \"%s\\n\" \"$*\" > \"$tmpfile\" && chmod +x \"$tmpfile\" && /usr/bin/sudo \"$tmpfile\"",
-        task_dir
-    );
+            "tmpfile=$(mktemp {}/XXXXXXXX) && printf \"%s\\n\" \"$*\" > \"$tmpfile\" && chmod +x \"$tmpfile\" && /usr/bin/sudo \"$tmpfile\"",
+            task_dir
+        );
     let exec_content = format!(
-        "source workspace/pyvenv/bin/activate\ncat() {{ [ \"$(wc -c < \"$1\" 2>/dev/null || echo 0)\" -le 1048576 ] && /bin/cat \"$1\" || echo \"跳过大文件: $1\"; }}\nsudo() {{ {}/qfsudo \"$@\"; }}\n{}",
+        "source workspace/pyvenv/bin/activate\ncat() {{ if [ \"$(wc -c < \"$1\" 2>/dev/null || echo 0)\" -le 1048576 ]; then /bin/cat \"$1\"; else echo \"无法cat二进制或大文件: $1\"; fi; }}\nsudo() {{ {}/qfsudo \"$@\"; }}\n{}",
         task_dir,
         cmd_text
     );
+
 
     _ = fs::write(format!("{}/qfsudo", task_dir), qfsudo_content);
     _ = fs::write(format!("{}/exec.sh", task_dir), exec_content);
