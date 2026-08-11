@@ -94,39 +94,59 @@ async fn exec(chat_id: i64, params: Value) -> String {
     let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
     let task_dir = format!("qfclawtask/{}", task_id);
+    // 绝对路径：避免命令内 cd 切换目录后相对路径失效
+    let abs_task_dir = std::env::current_dir().unwrap().join(&task_dir).to_string_lossy().to_string();
 
     // 1. 发送初始消息
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
     let msg_id = MsgBuilder::new(&start_msg).id(chat_id).fold().send().await;
 
     // 2. 环境准备 (改为等待 status 确保完成，而不是 sleep)
-    let _ = Command::new("mkdir").args(["-p", &task_dir]).status().await;
+    let _ = Command::new("mkdir").args(["-p", &abs_task_dir]).status().await;
 
     // 写入脚本 (注意：sudo 增加绝对路径 /usr/bin/sudo 避免函数递归)
     let qfsudo_content = format!(
-            "tmpfile=$(mktemp {}/XXXXXXXX) && printf \"%s\\n\" \"$*\" > \"$tmpfile\" && chmod +x \"$tmpfile\" && /usr/bin/sudo \"$tmpfile\"",
-            task_dir
+            "opts=()\n\
+             while [ $# -gt 0 ]; do\n\
+               case \"$1\" in\n\
+                 -u|-U|-g|-G|-C|-p|-r|-t|-T) opts+=(\"$1\" \"$2\"); shift 2 ;;\n\
+                 -h|-V|-n|-E|-H|-i|-s|-b|-k|-v|-l|-S|-A|-B) opts+=(\"$1\"); shift ;;\n\
+                 --) shift; break ;;\n\
+                 -*) opts+=(\"$1\"); shift ;;\n\
+                 *) break ;;\n\
+               esac\n\
+             done\n\
+             if [ $# -eq 0 ]; then exec /usr/bin/sudo \"${{opts[@]}}\"; fi\n\
+             tmpfile=$(mktemp {}/XXXXXXXX)\n\
+             printf '%q ' \"$@\" > \"$tmpfile\"\n\
+             echo >> \"$tmpfile\"\n\
+             chmod +x \"$tmpfile\"\n\
+             /usr/bin/sudo \"${{opts[@]}}\" \"$tmpfile\"\n\
+             status=$?\n\
+             rm -f \"$tmpfile\"\n\
+             exit $status",
+            abs_task_dir
         );
     let exec_content = format!(
-        "source workspace/pyvenv/bin/activate\ncat() {{ if [ \"$(wc -c < \"$1\" 2>/dev/null || echo 0)\" -le 1048576 ]; then /bin/cat \"$1\"; else echo \"无法cat二进制或大文件: $1\"; fi; }}\nsudo() {{ {}/qfsudo \"$@\"; }}\n{}",
-        task_dir,
+        "source workspace/pyvenv/bin/activate\ncat() {{ if [ \"$(wc -c < \"$1\" 2>/dev/null || echo 0)\" -le 1048576 ]; then /bin/cat \"$1\"; else echo \"无法cat二进制或大文件: $1\"; fi; }}\nsudo() {{ {}/qfsudo \"$@\"; }}\n{}\nunset -f sudo cat",
+        abs_task_dir,
         cmd_text
     );
 
 
-    _ = fs::write(format!("{}/qfsudo", task_dir), qfsudo_content);
-    _ = fs::write(format!("{}/exec.sh", task_dir), exec_content);
+    _ = fs::write(format!("{}/qfsudo", abs_task_dir), qfsudo_content);
+    _ = fs::write(format!("{}/exec.sh", abs_task_dir), exec_content);
 
     // 立即执行 chmod 并等待完成
     let _ = Command::new("chmod")
-        .args(["+x", &format!("{}/exec.sh", task_dir), &format!("{}/qfsudo", task_dir)])
+        .args(["+x", &format!("{}/exec.sh", abs_task_dir), &format!("{}/qfsudo", abs_task_dir)])
         .status()
         .await;
 
     // 3. 启动主进程
     let mut child = Command::new("bash")
         .arg("-c")
-        .arg(format!("{}/exec.sh", task_dir)) // 删掉了 && #rm，清理逻辑放在 Rust 里更安全
+        .arg(format!("{}/exec.sh", abs_task_dir)) // 删掉了 && #rm，清理逻辑放在 Rust 里更安全
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -155,7 +175,7 @@ async fn exec(chat_id: i64, params: Value) -> String {
             let log = output_buf.lock().await.clone();
             let code = wait_result.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
             // 任务成功结束，清理临时目录
-            let _ = Command::new("rm").args(["-rf", &task_dir]).status().await;
+            let _ = Command::new("rm").args(["-rf", &abs_task_dir]).status().await;
             format!("⚡任务完成 (Code {}):\n{}", code, log)
         }
         Err(_) => {
