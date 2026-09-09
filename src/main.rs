@@ -9,12 +9,11 @@ use tokio::sync::mpsc;
 
 
 //  fn deal_file(msg: Value)
-fn get_msg(msg: &Value) -> (String, i64, i64) {
-    qffunc::print_json(&msg);
+fn get_msg(msg: &Value) -> (String, i64) {
+    qffunc::print_json(msg);
     let text = msg["message"]["text"].as_str().unwrap_or("").to_string();
     let chat_id = msg["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_USER_ID);
-    let from_id = msg["message"]["from"]["id"].as_i64().unwrap_or(*ALLOW_USER_ID);
-    (text, chat_id, from_id)
+    (text, chat_id)
 }
 
 async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
@@ -22,48 +21,19 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
     let mut current_task: Option<(tokio::task::JoinHandle<()>, mpsc::Sender<String>)> = None;
 
     while let Some(payload) = rx.recv().await {
-        let (mut user_input, chat_id, from_id) = get_msg(&payload);
-        let allow_list: [i64; 2] = [*ALLOW_USER_ID, *ALLOW_GROUP_ID];
-        let active_accept_group_msg = match qffunc::read_json("config/bot.json", "active_accept_group_msg") {
-            Ok(resp) => resp.as_bool().unwrap_or(false),
-            Err(_) => false,
-        };
-        let bot_id = match qffunc::read_json("config/bot.json", "bot_id") {
-            Ok(resp) => resp.as_i64().unwrap_or(0),
-            Err(_) => 0,
-        };
-        if !allow_list.contains(&chat_id) {
+        let (user_input, chat_id) = get_msg(&payload);
+        let allow_user_id: i64 = *ALLOW_USER_ID;
+        if allow_user_id != chat_id {
             _ = MsgBuilder::new(&format!("不在白名单，您的id：\n      {}", chat_id))
                 .id(chat_id)
                 .send()
                 .await;
             continue;
         }
-        if chat_id < 0 {
-            let allow_prefix = &format!("@{}", bot_id);
-            if active_accept_group_msg {
-                if from_id != *ALLOW_USER_ID {
-                    if !user_input.starts_with(allow_prefix) {
-                        continue;
-                    } else {
-                        if let Some(replace_input) = user_input.strip_prefix(allow_prefix) {
-                            user_input = format!("{}: \n{}", from_id, replace_input);
-                        }
-                    }
-                }
-            } else {
-                if !user_input.starts_with(allow_prefix) {
-                    continue;
-                } else {
-                    if let Some(replace_input) = user_input.strip_prefix(allow_prefix) {
-                        user_input = replace_input.trim().to_string();
-                    }
-                }
-            }
-        }
+
         if payload.get("callback_query").is_some() {
             if let Err(e) = deal_callback(chat_id, &payload).await {
-                println!("{}", e.to_string())
+                println!("{}", e)
             }
             continue;
         }
@@ -87,7 +57,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             .any(|&cmd| user_input.as_str().contains(cmd))
         {
             tokio::spawn(async move {
-                if let Err(_) = command::exec_cmd(chat_id, &user_input, &payload).await {
+                if command::exec_cmd(chat_id, &user_input, &payload).await.is_err() {
                     _ = MsgBuilder::new("❌指令执行失败").send().await;
                 }
             });
@@ -97,10 +67,8 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
         // --- 核心逻辑修改：管理单任务后台进程 ---
 
         // 1. 检查当前任务是否已运行结束（如果是，则重置）
-        if let Some((handle, _)) = &current_task {
-            if handle.is_finished() {
-                current_task = None;
-            }
+        if let Some((handle, _)) = &current_task && handle.is_finished() {
+            current_task = None;
         }
 
         // 2. 如果没有任务正在运行，则启动它
@@ -109,7 +77,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             let first_input = user_input.clone();
             let handle = tokio::spawn(async move {
                 // 假设 aichat::main 现在接收 rx_chat
-                if let Err(e) = aichat::main(from_id, chat_id, &first_input, rx_chat).await {
+                if let Err(e) = aichat::main(chat_id, &first_input, rx_chat).await {
                     _ = MsgBuilder::new(&e.to_string()).send().await;
                 }
             });
@@ -150,7 +118,7 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
                 }
                 Err(e) => eprintln!("JSON parse error: {}", e),
             },
-            Err(e) => println!("Request error: {}", e.to_string()),
+            Err(e) => println!("Request error: {}", e),
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

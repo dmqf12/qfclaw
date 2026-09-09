@@ -55,12 +55,6 @@ async fn operate_file(chat_id: i64, parame: &Value) -> String {
     String::new()
 }
 
-async fn call_bot(chat_id: i64, args: &Value) -> String {
-    let text = args["text"].as_str().unwrap_or("NONE");
-    let bot_id = args["bot_id"].as_i64().unwrap_or(0);
-    _ = MsgBuilder::new(&format!("@{} {}", bot_id, escape_markdown_v2(text))).id(chat_id).send().await;
-    "提交成功，将在完成后回复".to_string()
-}
 
 pub struct ToolRequest {
     pub payload: Value,
@@ -237,10 +231,9 @@ pub async fn toolcall(mut rx: tokio::sync::mpsc::Receiver<ToolRequest>) {
                 ).unwrap_or(json!({}));
 
                 let run_result = match name {
-                    "exec" => exec(chat_id, args).await,
                     "operate_task" => operate_task(chat_id, args).await,
                     "operate_file" => operate_file(chat_id, &args).await,
-                    _ => call_bot(chat_id, &args).await,
+                    _ => exec(chat_id, args).await,
                 };
 
                 results.push(json!({

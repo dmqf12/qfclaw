@@ -54,13 +54,6 @@ pub static ALLOW_USER_ID: Lazy<i64> = Lazy::new(|| {
         .unwrap_or(0)
 });
 
-pub static ALLOW_GROUP_ID: Lazy<i64> = Lazy::new(|| {
-    fs::read_to_string("config/bot.json")
-        .ok()
-        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-        .and_then(|json| json["allow_group_id"].as_i64())
-        .unwrap_or(0)
-});
 
 pub static BOT_BASE_URL: Lazy<String> = Lazy::new(|| {
     fs::read_to_string("config/bot.json")
@@ -86,12 +79,7 @@ async fn reply_callback(callback_id: &str) {
     let url = &format!("{}{}/answerCallbackQuery", *BOT_BASE_URL, *BOT_TOKEN);
     let body = json!({ "callback_query_id": callback_id});
     //    , "text": "操作成功", "show_alert": false});
-    if let Ok(_) = client.post(url).json(&body).send().await {
-        /*if let Ok(status) = result.json().await {
-            print_json(&status);
-        }  */
-        return;
-    }
+    _ = client.post(url).json(&body).send().await;
 }
 pub async fn deal_callback(chat_id: i64, msg: &Value) -> Result<bool> {
     let (callback_id, text, msg_id) = get_callback_data(msg);
@@ -133,7 +121,7 @@ pub async fn send_inline(chat_id: i64, text: &str, inline_keyboard: Value) -> Re
         "reply_markup": { "inline_keyboard": inline_keyboard } });
     for _i in 1..3 {
         let result = client
-            .post(&format!("{}{}/SendMessage", *BOT_BASE_URL, *BOT_TOKEN))
+            .post(format!("{}{}/SendMessage", *BOT_BASE_URL, *BOT_TOKEN))
             .json(&body)
             .send()
             .await?;
@@ -235,12 +223,10 @@ impl MsgBuilder {
                 body["draft_id"] = json!(1)
             }
             let mut status = json!( { "ok": false } );
-            if let Ok(result) = client.post(&format!("{}{}/SendMessage{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await {
-                if let Ok(resp) = result.json().await {
-                    status = resp;
-                }
+            if let Ok(result) = client.post(format!("{}{}/SendMessage{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await && let Ok(resp) = result.json().await {
+                status = resp;
             } else {
-                failed_times = failed_times + 1
+                failed_times += 1
             }
             if failed_times > 1 {
                 return vec![9999999]
@@ -261,10 +247,7 @@ impl MsgBuilder {
                         break
                     } else {
                         println!("{}", status);
-                        println!(
-                            "{}",
-                            format!("❌消息发送失败！\ndescription: {}", &p.to_string())
-                        );
+                        println!("❌消息发送失败！\ndescription: {}", &p.to_string());
                     }
                 }
             } else {
@@ -284,9 +267,9 @@ impl MsgBuilder {
             }
         }
         if msg_id.is_empty() {
-            return vec![9999999]
+            vec![9999999]
         } else {
-            return msg_id
+            msg_id
         }
     }
 }
@@ -324,7 +307,7 @@ pub fn clear_up(chat_id: i64, ids: Vec<u64>, delay_secs: u64, should_save: bool)
             body["message_id"] = json!(id);
             for attempt in 0..2 {
                 match client
-                    .post(&format!("{}{}/deleteMessage", *BOT_BASE_URL, *BOT_TOKEN))
+                    .post(format!("{}{}/deleteMessage", *BOT_BASE_URL, *BOT_TOKEN))
                     .json(&body)
                     .send()
                     .await

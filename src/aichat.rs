@@ -19,8 +19,7 @@ fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
         .unwrap_or_default();
     // 直接取出 Value，如果是 None 则创建新的空数组
     let tool_calls = chat_result["choices"][0]["message"]
-        .get("tool_calls")
-        .map(|v| v.clone())
+        .get("tool_calls").cloned()
         .unwrap_or_else(|| Value::Array(Vec::new()));
     let total_tokens = chat_result["usage"]["total_tokens"].as_u64().unwrap_or(0);
     (
@@ -56,7 +55,7 @@ async fn chat(
     }
 
     let chat_response: Value = response.json().await?;
-    return Ok(chat_response);
+    Ok(chat_response)
 }
 
 fn build_system_prompt() -> String {
@@ -76,8 +75,8 @@ fn init(chat_id: i64, user_input: &str) -> Result<(Value, Vec<Value>, String, St
     }
     //  检查对话记录
     let messages_path = "messages/";
-    fs::create_dir_all(&messages_path)?; // 已存在时不会报错
-    let msg_file = format!("{}/{}_messages.json", &messages_path, chat_id);
+    fs::create_dir_all(messages_path)?; // 已存在时不会报错
+    let msg_file = format!("{}/{}_messages.json", messages_path, chat_id);
     let mut messages: Vec<Value> =  match qffunc::file_to_json(&msg_file) {
         Ok(resp) => resp.as_array().cloned().unwrap_or_default(),
         Err(_) => vec![],
@@ -139,13 +138,13 @@ fn init(chat_id: i64, user_input: &str) -> Result<(Value, Vec<Value>, String, St
         "tool_choice":  "auto",
         "max_tokens": 20480
     });
-    return Ok((
+    Ok((
         payload,
         messages,
         base_url.to_string(),
         api_key.to_string(),
         show_reasoning_mode.to_string(),
-    ));
+    ))
 }
 
 fn 记录token(chat_id: i64, total_tokens: u64) -> Result<()> {
@@ -158,7 +157,7 @@ fn 记录token(chat_id: i64, total_tokens: u64) -> Result<()> {
     serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
     Ok(())
 }
-fn 保存消息(chat_id: i64, messages: &Vec<Value>) -> Result<()> {
+fn 保存消息(chat_id: i64, messages: &[Value]) -> Result<()> {
     let msg_file = format!("messages/{}_messages.json", chat_id);
     serde_json::to_writer_pretty(
         fs::File::create(format!("{}.tmp", msg_file))?,
@@ -175,7 +174,7 @@ fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
     messages
 }
 
-pub async fn main(from_id: i64, chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
+pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
     let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(chat_id, user_input)?;
 
     // --- 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
@@ -225,7 +224,7 @@ pub async fn main(from_id: i64, chat_id: i64, user_input: &str, mut rx: mpsc::Re
 
             let request = ToolRequest {
                 payload: tool_calls,
-                chat_id: chat_id,
+                chat_id,
                 resp_tx: tx_feedback, // 把 oneshot 的发送端传给任务
             };
 
@@ -246,14 +245,6 @@ pub async fn main(from_id: i64, chat_id: i64, user_input: &str, mut rx: mpsc::Re
             payload["messages"] = Value::Array(messages.clone());
             保存消息(chat_id, &messages)?;
         } else {
-            let active_accept_group_msg = match qffunc::read_json("config/bot.json", "active_accept_group_msg") {
-                Ok(resp) => resp.as_bool().unwrap_or(false),
-                Err(_) => false,
-            };
-            if chat_id < 0 && from_id != *ALLOW_USER_ID && !active_accept_group_msg {
-                let msg_id = MsgBuilder::new(&format!("@{} {}", from_id, content)).id(chat_id).send().await;
-                clear_up(chat_id, msg_id, 0, false);
-            }
             messages.push(
                 json!({"role": "assistant", "content": content, "reasoning_content": reasoning}),
             );

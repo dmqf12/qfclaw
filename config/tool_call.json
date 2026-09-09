@@ -16,21 +16,6 @@
     }
   },
   {
-    "type": "function",
-    "function": {
-      "name": "call_bot",
-      "description": "在群组内调用其他机器人",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "bot_id": { "type": "integer", "description": "要调用的机器人的id" },
-          "text": { "type": "string", "description": "文本内容" }
-        },
-        "required": ["bot_id", "text"]
-      }
-    }
-  },
-  {
   "type": "function",
     "function": {
       "name": "exec",
