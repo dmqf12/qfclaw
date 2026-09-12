@@ -259,7 +259,7 @@ impl MsgBuilder {
                 }
                 msg_id.push(status["result"]["message_id"].as_u64().unwrap_or_default());
                 if self.do_clear {
-                    clear_up(self.id, msg_id.clone(), 0, true);
+                    clear_up(self.id, msg_id.clone(), 3, true);
                 }
                 if new_text.is_empty() {
                     break

@@ -124,7 +124,7 @@ fn init(chat_id: i64, user_input: &str) -> Result<(Value, Vec<Value>, String, St
     }
     messages.push(json!({"role": "user", "content": user_input}));
 
-    let func: serde_json::Value = fs::File::open("config/function_call.json")
+    let func: serde_json::Value = fs::File::open("config/tool_call.json")
         .ok()
         .and_then(|file| serde_json::from_reader(file).ok())
         .unwrap();
@@ -182,6 +182,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
     tokio::spawn(toolcall(tool_rx)); // 后台任务持续运行，接收请求
 
     loop {
+        _ = MsgBuilder::new("🧠思考中...").id(chat_id).clear().send().await;
         let reply: Value = match chat(&api_key, &base_url, &payload).await {
             Ok(resp) => resp,
             Err(e) => {
@@ -195,8 +196,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
 
         if !reasoning.is_empty() {
             if show_reasoning_mode == "draft" {
-                let msg_id = MsgBuilder::new(&format!("_🧠Reasoning: {}_", escape_markdown_v2(&reasoning))).id(chat_id).parse("MarkdownV2").send().await;
-                clear_up(chat_id, msg_id, 3, true);
+                _ = MsgBuilder::new("🧠思考完成").id(chat_id).clear().send().await;
             } else {
                 let _msg_id = MsgBuilder::new(&format!("🧠Reasoning: {}", reasoning)).id(chat_id).fold().send().await;
             }
