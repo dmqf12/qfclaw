@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::send::*;
+use crate::telegram::*;
 use crate::toolcall::*;
 
 
@@ -30,32 +30,51 @@ fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
     )
 }
 
-async fn chat(
-    api_key: &str,
-    base_url: &str,
-    payload: &Value,
-) -> Result<serde_json::Value> {
-    let client = Client::new();
-    let url = format!("{}/chat/completions", base_url);
-    let response = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await?;
+struct ChatRequest {
+    base_url: String,
+    api_key: String,
+    model: String,
+    stream: String,
+    thinking: String,
+    messages: Vec<Value>,
+    tools: Value,
+    tool_choice: String,
+    max_tokens: u32
+}
 
-    if !response.status().is_success() {
-        let error_json: Value = response.json().await.context("请求失败")?;
-        qffunc::print_json(&error_json);
-        let error_message = error_json["error"]["message"]
-            .as_str()
-            .unwrap_or("请求失败");
-        return Err(anyhow!("API 请求失败: {}", error_message));
+impl ChatRequest {
+    async fn send(&self) -> Result<Value> {
+        let payload = json!({
+            "model": &self.model,
+            "stream": &self.stream,
+            "thinking": {"type": &self.thinking},
+            "messages": &self.messages,
+            "tools": &self.tools,
+            "tool_choice": &self.tool_choice,
+            "max_tokens": &self.max_tokens
+        });
+        let client = Client::new();
+        let url = format!("{}/chat/completions", &self.base_url);
+        let response = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", &self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_json: Value = response.json().await.context("请求失败")?;
+            qffunc::print_json(&error_json);
+            let error_message = error_json["error"]["message"]
+                .as_str()
+                .unwrap_or("请求失败");
+            return Err(anyhow!("API 请求失败: {}", error_message));
+        }
+
+        let chat_response: Value = response.json().await?;
+        Ok(chat_response)
     }
-
-    let chat_response: Value = response.json().await?;
-    Ok(chat_response)
 }
 
 fn build_system_prompt() -> String {
@@ -68,7 +87,7 @@ fn build_system_prompt() -> String {
         .join("\n")
 }
 
-fn init(chat_id: i64, user_input: &str) -> Result<(Value, Vec<Value>, String, String, String)> {
+fn chat_init(chat_id: i64, user_input: &str) -> Result<ChatRequest> {
     println!("{}", user_input);
     if user_input.is_empty() {
         return Err(anyhow!("空消息"));
@@ -112,16 +131,7 @@ fn init(chat_id: i64, user_input: &str) -> Result<(Value, Vec<Value>, String, St
         .unwrap_or("https://api.deepseek.com/v1");
     let model_name = model["model_name"].as_str().unwrap_or_default();
     let stream: bool = model_config["stream"].as_bool().unwrap_or(true);
-    let mut show_reasoning_mode = model_config["reasoning"].as_str().unwrap_or("disabled");
-    let reasoning: &str;
-    if show_reasoning_mode.contains("_") {
-        let parts: Vec<&str> = show_reasoning_mode.split('_').collect();
-        reasoning = parts.last().unwrap();
-        show_reasoning_mode = parts.first().unwrap();
-    } else {
-        show_reasoning_mode = "draft";
-        reasoning = "disabled";
-    }
+    let reasoning = model_config["reasoning"].as_str().unwrap_or("disabled");
     messages.push(json!({"role": "user", "content": user_input}));
 
     let func: serde_json::Value = fs::File::open("config/tool_call.json")
@@ -129,22 +139,17 @@ fn init(chat_id: i64, user_input: &str) -> Result<(Value, Vec<Value>, String, St
         .and_then(|file| serde_json::from_reader(file).ok())
         .unwrap();
     //  发送并保存模型输出
-    let payload = json!({
-        "model": model_name,
-        "stream": stream,
-        "thinking": {"type":reasoning},
-        "messages": messages,
-        "tools": func,
-        "tool_choice":  "auto",
-        "max_tokens": 20480
-    });
-    Ok((
-        payload,
-        messages,
-        base_url.to_string(),
-        api_key.to_string(),
-        show_reasoning_mode.to_string(),
-    ))
+    Ok(ChatRequest {
+        model: model_name.to_string(),
+        stream: stream.to_string(),
+        thinking: reasoning.to_string(),
+        messages: messages,
+        tools: func,
+        tool_choice: "auto".to_string(),
+        max_tokens: 20480,
+        api_key: api_key.to_string(),
+        base_url: base_url.to_string()
+    })
 }
 
 fn 记录token(chat_id: i64, total_tokens: u64) -> Result<()> {
@@ -157,8 +162,8 @@ fn 记录token(chat_id: i64, total_tokens: u64) -> Result<()> {
     serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
     Ok(())
 }
-fn 保存消息(chat_id: i64, messages: &[Value]) -> Result<()> {
-    let msg_file = format!("messages/{}_messages.json", chat_id);
+fn 保存消息(message_name: i64, messages: &[Value]) -> Result<()> {
+    let msg_file = format!("messages/{message_name}_messages.json");
     serde_json::to_writer_pretty(
         fs::File::create(format!("{}.tmp", msg_file))?,
         &messages[1..],
@@ -167,15 +172,9 @@ fn 保存消息(chat_id: i64, messages: &[Value]) -> Result<()> {
     Ok(())
 }
 
-fn 截取消息(mut messages: Vec<Value>) -> Vec<Value> {
-    if let Some(obj) = messages.last_mut().and_then(|m| m.as_object_mut()) {
-        obj.remove("tool_calls");
-    }
-    messages
-}
 
 pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
-    let (mut payload, mut messages, base_url, api_key, show_reasoning_mode) = init(chat_id, user_input)?;
+    let mut chat_request = chat_init(chat_id, user_input)?;
 
     // --- 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
     let (tool_tx, tool_rx) = mpsc::channel::<ToolRequest>(32);
@@ -183,7 +182,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
 
     loop {
         _ = MsgBuilder::new("🧠思考中...").id(chat_id).clear().send().await;
-        let reply: Value = match chat(&api_key, &base_url, &payload).await {
+        let reply: Value = match chat_request.send().await {
             Ok(resp) => resp,
             Err(e) => {
                 let _ = MsgBuilder::new(&e.to_string()).id(chat_id).send().await;
@@ -195,9 +194,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
         记录token(chat_id, total_tokens)?;
 
         if !reasoning.is_empty() {
-            if show_reasoning_mode == "draft" {
-                _ = MsgBuilder::new("🧠思考完成").id(chat_id).clear().send().await;
-            } else {
+            if false {
                 let _msg_id = MsgBuilder::new(&format!("🧠Reasoning: {}", reasoning)).id(chat_id).fold().send().await;
             }
         }
@@ -205,12 +202,14 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
         if !content.is_empty() {
             let _ = MsgBuilder::new(&content).id(chat_id).send().await;
         }
-
+        let mut messages = chat_request.messages.clone();
         if let Ok(new_msg) = rx.try_recv() {
-            messages = 截取消息(messages);
+            if let Some(obj) = messages.last_mut().and_then(|m| m.as_object_mut()) {
+                obj.remove("tool_calls");
+            }
             messages.push(json!({"role": "user", "content": new_msg}));
             println!("打断❓");
-            payload["messages"] = Value::Array(messages.clone());
+            chat_request.messages = messages.clone();
             保存消息(chat_id, &messages)?;
             continue;
         }
@@ -242,13 +241,13 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
             }
 
             messages.extend(tool_calls_result.as_array().unwrap().clone());
-            payload["messages"] = Value::Array(messages.clone());
+            chat_request.messages = messages.clone();
             保存消息(chat_id, &messages)?;
         } else {
             messages.push(
                 json!({"role": "assistant", "content": content, "reasoning_content": reasoning}),
             );
-            payload["messages"] = Value::Array(messages.clone());
+            chat_request.messages = messages.clone();
             保存消息(chat_id, &messages)?;
             break;
         }

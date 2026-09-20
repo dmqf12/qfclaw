@@ -102,8 +102,9 @@ pub async fn deal_callback(chat_id: i64, msg: &Value) -> Result<bool> {
             .ok()
             .and_then(|file| serde_json::from_reader(file).ok())
             .unwrap_or_else(|| json!({}));
-        let content = text.chars().skip(10).collect::<String>();
-        models["config"]["reasoning"] = json!(content);
+        let params: Vec<&str> = text.split("_").collect();
+        models["config"]["reasoning"] = json!(&params[1]);
+        models["config"]["show_reasoning"] = json!(&params[2]);
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
         clear_up(chat_id, vec!(msg_id), 0, true);

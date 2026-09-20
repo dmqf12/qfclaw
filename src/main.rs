@@ -1,8 +1,8 @@
 mod aichat;
 mod toolcall;
 mod command;
-pub mod send;
-use crate::send::*;
+pub mod telegram;
+use crate::telegram::*;
 use serde_json::{Value};
 use std::time::Duration;
 use tokio::sync::mpsc;

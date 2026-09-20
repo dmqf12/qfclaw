@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 //  use anyhow::{ anyhow, Result };
 use uuid::Uuid;
 use tokio::sync::{oneshot};
-use crate::send::*;
+use crate::telegram::*;
 
 
 async fn read(file: &str) -> String {
@@ -81,11 +81,9 @@ async fn notify(chat_id: i64, msg: &str, clear: bool) {
 }
 
 
-
-
-async fn exec(chat_id: i64, params: Value) -> String {
-    let cmd_text = params["command"].as_str().unwrap_or("");
-    let timeout_secs = params["timeout"].as_u64().unwrap_or(10);
+async fn exec(chat_id: i64, parame: &Value) -> String {
+    let cmd_text = parame["command"].as_str().unwrap_or("");
+    let timeout_secs = parame["timeout"].as_u64().unwrap_or(10);
     let task_id = Uuid::new_v4().to_string();
     let task_dir = format!("qfclawtask/{}", task_id);
     // 绝对路径：避免命令内 cd 切换目录后相对路径失效
@@ -233,7 +231,8 @@ pub async fn toolcall(mut rx: tokio::sync::mpsc::Receiver<ToolRequest>) {
                 let run_result = match name {
                     "operate_task" => operate_task(chat_id, args).await,
                     "operate_file" => operate_file(chat_id, &args).await,
-                    _ => exec(chat_id, args).await,
+                    "exec" => exec(chat_id, &args).await,
+                    _ => "未知的toolcall".to_string(),
                 };
 
                 results.push(json!({
