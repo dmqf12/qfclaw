@@ -152,8 +152,8 @@ fn chat_init(chat_id: i64, user_input: &str) -> Result<ChatRequest> {
     })
 }
 
-fn 记录token(chat_id: i64, total_tokens: u64) -> Result<()> {
-    let session_file = &format!("messages/{}_session.json", chat_id);
+fn 记录token(total_tokens: u64) -> Result<()> {
+    let session_file = "messages/session.json";
     let mut session: Value = fs::File::open(session_file)
         .ok()
         .and_then(|file| serde_json::from_reader(file).ok())
@@ -162,8 +162,8 @@ fn 记录token(chat_id: i64, total_tokens: u64) -> Result<()> {
     serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
     Ok(())
 }
-fn 保存消息(message_name: i64, messages: &[Value]) -> Result<()> {
-    let msg_file = format!("messages/{message_name}_messages.json");
+fn 保存消息(messages: &[Value]) -> Result<()> {
+    let msg_file = format!("messages/messages.json");
     serde_json::to_writer_pretty(
         fs::File::create(format!("{}.tmp", msg_file))?,
         &messages[1..],
@@ -181,7 +181,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
     tokio::spawn(toolcall(tool_rx)); // 后台任务持续运行，接收请求
 
     loop {
-        _ = MsgBuilder::new("🧠思考中...").id(chat_id).clear().send().await;
+        _ = MsgBuilder::new("🧠思考中...").id(chat_id).send().await?.delete(3);
         let reply: Value = match chat_request.send().await {
             Ok(resp) => resp,
             Err(e) => {
@@ -191,7 +191,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
         };
 
         let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
-        记录token(chat_id, total_tokens)?;
+        记录token(total_tokens)?;
 
         if !reasoning.is_empty() {
             if false {
@@ -210,7 +210,7 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
             messages.push(json!({"role": "user", "content": new_msg}));
             println!("打断❓");
             chat_request.messages = messages.clone();
-            保存消息(chat_id, &messages)?;
+            保存消息(&messages)?;
             continue;
         }
         if let Some(arr) = tool_calls.as_array()
@@ -242,13 +242,13 @@ pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>
 
             messages.extend(tool_calls_result.as_array().unwrap().clone());
             chat_request.messages = messages.clone();
-            保存消息(chat_id, &messages)?;
+            保存消息(&messages)?;
         } else {
             messages.push(
                 json!({"role": "assistant", "content": content, "reasoning_content": reasoning}),
             );
             chat_request.messages = messages.clone();
-            保存消息(chat_id, &messages)?;
+            保存消息(&messages)?;
             break;
         }
     }

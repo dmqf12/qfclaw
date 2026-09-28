@@ -18,10 +18,10 @@ fn date_now() -> String {
 }
 
 pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool> {
-    let session_file = &format!("messages/{}_session.json", chat_id);
-    let messages_file = &format!("messages/{}_messages.json", chat_id);
+    let session_file = "messages/session.json";
+    let messages_file = "messages/messages.json";
 
-    if cmd_text.contains("/mv_session") {
+    if cmd_text.starts_with("/mv_session") {
         let target_path = cmd_text
             .splitn(2, ' ')
             .last()
@@ -30,16 +30,17 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
         fs::create_dir_all(format!("messages/{}", target_path))?;
         let target_file = format!("messages/{}/{}.json", target_path, date_now());
         let _ = fs::rename(messages_file, target_file);
-        let new_msg_id = MsgBuilder::new("✅ New session started").id(chat_id).send().await;
-        let session = json!({"last_session_start": new_msg_id[0], "total_tokens": 0});
+        let msg_id = MsgBuilder::new("✅ New session started").id(chat_id).send().await?.msg_id;
+        let session = json!({"last_session_start": msg_id, "total_tokens": 0});
         serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
     }
     if cmd_text == "/new" {
         Box::pin(exec_cmd(chat_id, "/mv_session archive", msg)).await?;
     }
     if cmd_text == "/restart" {
-        let msg_id = MsgBuilder::new("🔄重启中").id(chat_id).send().await;
-        clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 0, true);
+        if let Some(msg_id) = MsgBuilder::new("🔄重启中").id(chat_id).send().await?.msg_id {
+            delete_msg(chat_id, vec![msg_id - 1, msg_id], 3, true);
+        }
         tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
         match Command::new("bash").arg("-c").arg("systemctl --user restart qfclaw").output() {
             Ok(_) => return Ok(true),
@@ -52,37 +53,37 @@ pub async fn exec_cmd(chat_id: i64, cmd_text: &str, msg: &Value) -> Result<bool>
             .and_then(|file| serde_json::from_reader(file).ok())
             .unwrap_or_default();
         let n = session["total_tokens"].as_u64().unwrap_or(0);
-        let msg_id = MsgBuilder::new(&format!(
+        if let Some(msg_id) = MsgBuilder::new(&format!(
             "📚 Context: {:.1}K/1M ({:.1}%)",
             n as f64 / 1000.0,
             n as f64 / 10000.
-        ))
-        .id(chat_id)
-        .send()
-        .await;
-        clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 5, true);
+        )).id(chat_id).send().await?.msg_id {
+            delete_msg(chat_id, vec![msg_id - 1, msg_id], 3, true);
+        }
     }
     if cmd_text == "/reasoning" {
          let msg_id = send_inline(chat_id, "是否显示推理过程", json!([
             [{"text": "隐藏", "callback_data": "reasoning_set_draft"}, {"text": "关闭", "callback_data": "reasoning_disabled"}],
             [{"text": "折叠", "callback_data": "reasoning_set_fold"}]])).await?;
-         clear_up(chat_id, vec![ msg_id - 1 ], 0, true);
+         delete_msg(chat_id, vec![ msg_id - 1 ], 0, true);
     }
 
     if cmd_text == "/clear" {
-        let message_id = MsgBuilder::new("🧹Clear up immediately").id(chat_id).send().await;
+        let message_id = MsgBuilder::new("🧹Clear up immediately").id(chat_id).send().await?.msg_id;
         let last_session_id = match qffunc::read_json(session_file, "last_session_start") {
             Ok(resp) => resp,
             Err(e) => {
-                MsgBuilder::new(&e.to_string()).id(chat_id).send().await;
+                _ = MsgBuilder::new(&e.to_string()).id(chat_id).send().await;
                 return Err(e)
             }
         };
         Box::pin(exec_cmd(chat_id, "/mv_session clear", msg)).await?;
         if let Some(last_session_id) = last_session_id.as_u64() {
-            clear_up(chat_id, (last_session_id..=message_id[0]).collect(), 0, true);
+            if let Some(msg_id) = message_id {
+                delete_msg(chat_id, (last_session_id..=msg_id).collect::<Vec<u64>>(), 0, true);
+            }
         } else {
-            MsgBuilder::new("🧹当前无session可清理").id(chat_id).send().await;
+            _ = MsgBuilder::new("🧹当前无session可清理").id(chat_id).send().await;
         }
     }
 

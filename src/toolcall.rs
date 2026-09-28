@@ -74,9 +74,9 @@ lazy_static::lazy_static! {
 
 async fn notify(chat_id: i64, msg: &str, clear: bool) {
     println!("{}", msg);
-    let msg_id = MsgBuilder::new(msg).id(chat_id).fold().send().await;
-    if clear {
-        clear_up(chat_id, msg_id, 5, true);
+    let msg = MsgBuilder::new(msg).id(chat_id).fold().send().await;
+    if clear && let Ok(resp) = msg {
+        _ = resp.delete(5);
     }
 }
 
@@ -91,7 +91,7 @@ async fn exec(chat_id: i64, parame: &Value) -> String {
 
     // 1. 发送初始消息
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
-    let msg_id = MsgBuilder::new(&start_msg).id(chat_id).fold().send().await;
+    let msg= MsgBuilder::new(&start_msg).id(chat_id).fold().send().await;
 
     // 2. 环境准备 (改为等待 status 确保完成，而不是 sleep)
     let _ = Command::new("mkdir").args(["-p", &abs_task_dir]).status().await;
@@ -182,8 +182,9 @@ async fn exec(chat_id: i64, parame: &Value) -> String {
             format!("{}\n当前输出:\n{}", msg, current_log)
         }
     };
-
-    clear_up(chat_id, msg_id, 3, true);
+    if let Ok(resp) = msg {
+        _ = resp.delete(3);
+    }
     res_text
 }
 

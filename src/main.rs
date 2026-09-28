@@ -46,8 +46,7 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
                 handle.abort();
                 _ = MsgBuilder::new("🛑 任务已停止").id(chat_id).send().await;
             } else {
-                let msg_id = MsgBuilder::new("⚠️ 当前没有正在运行的任务").id(chat_id).send().await;
-                clear_up(chat_id, ((msg_id[0] - 1)..=msg_id[0]).collect(), 3, true);
+                _ = MsgBuilder::new("⚠️ 当前没有正在运行的任务").id(chat_id).send().await;
             }
             continue;
         }
@@ -128,7 +127,7 @@ async fn getupdates_receive(tx: mpsc::Sender<Value>) {
 async fn main() {
     //  _ = MsgBuilder::new("✅启动成功").send().await;
     //  let _ = command::exec_cmd("/status", &Value::Null).await;
-    _ = std::fs::remove_dir("qfclawtask");
+    _ = std::fs::remove_dir_all("qfclawtask");
 
     // 创建通道
     let (tx, rx) = mpsc::channel(32);

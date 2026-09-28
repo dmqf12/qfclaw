@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{ bail, Result };
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
@@ -86,12 +86,12 @@ pub async fn deal_callback(chat_id: i64, msg: &Value) -> Result<bool> {
     if text.contains("reasoning") {
         if text.contains("set") {
             if text.contains("draft") {
-                clear_up(chat_id, vec!(msg_id), 0, true);
+                delete_msg(chat_id, vec!(msg_id), 0, true);
                 _ = send_inline(chat_id, "请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_draft_enabled"}, {"text": "适应", "callback_data": "reasoning_draft_adaptive"}] ])).await;
             }
             if text.contains("fold") {
-                clear_up(chat_id, vec!(msg_id), 0, true);
+                delete_msg(chat_id, vec!(msg_id), 0, true);
                 _ = send_inline(chat_id, "请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
             }
@@ -107,8 +107,8 @@ pub async fn deal_callback(chat_id: i64, msg: &Value) -> Result<bool> {
         models["config"]["show_reasoning"] = json!(&params[2]);
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
-        clear_up(chat_id, vec!(msg_id), 0, true);
-        _ = MsgBuilder::new("✅操作成功").clear().send().await;
+        delete_msg(chat_id, vec!(msg_id), 0, true);
+        _ = MsgBuilder::new("✅操作成功").send().await?.delete(3);
     }
     Ok(true)
 }
@@ -141,44 +141,34 @@ pub async fn send_inline(chat_id: i64, text: &str, inline_keyboard: Value) -> Re
 }
 
 
-fn unicode_slice(s: &str, start: usize, end: usize) -> String {
-    let mut indices = s.char_indices();
-    let start_byte = indices.nth(start).map(|(i, _)| i).unwrap_or(s.len());
-    let end_byte = indices.nth(end - start - 1).map(|(i, _)| i).unwrap_or(s.len());
-    s[start_byte..end_byte].to_string()
-}
+// fn unicode_slice(s: &str, start: usize, end: usize) -> String {
+//     let mut indices = s.char_indices();
+//     let start_byte = indices.nth(start).map(|(i, _)| i).unwrap_or(s.len());
+//     let end_byte = indices.nth(end - start - 1).map(|(i, _)| i).unwrap_or(s.len());
+//     s[start_byte..end_byte].to_string()
+// }
 
 
 
 pub struct MsgBuilder {
-    text: String,
-    id: i64,
-    parse_mode: String,
-    draft: String,
-    do_clear: bool,
+    pub text: String,
+    pub chat_id: i64,
+    pub parse_mode: String,
+    pub msg_id: Option<u64>
 }
 
 impl MsgBuilder {
     pub fn new(text: &str) -> Self {
         MsgBuilder {
             text: text.to_string(),
-            id: *ALLOW_USER_ID,
+            chat_id: *ALLOW_USER_ID,
             parse_mode: String::from("Markdown"),
-            draft: String::from(""),
-            do_clear: false,
+            msg_id: None,
         }
     }
 
-    pub fn parse(mut self, parse_mode: &str) -> Self {
-        self.parse_mode = parse_mode.to_string();
-        self
-    }
     pub fn id(mut self, chat_id: i64) -> Self {
-        self.id = chat_id;
-        self
-    }
-    pub fn is_draft(mut self) -> Self {
-        self.draft = String::from("Draft");
+        self.chat_id = chat_id;
         self
     }
     pub fn fold(mut self) -> Self {
@@ -186,96 +176,37 @@ impl MsgBuilder {
         self.parse_mode = "MarkdownV2".to_string();
         self
     }
-    pub fn clear(mut self) -> Self {
-        self.do_clear = true;
-        self
+    pub fn delete(self, delay: u64) -> Result<()> {
+        if let Some(msg_id) = self.msg_id {
+            delete_msg(self.chat_id, vec![msg_id], delay, true);
+        }
+        Ok(())
     }
 
-    pub async fn send(mut self) -> Vec<u64> {
-        let mut msg_id = vec![];
-        if self.text.is_empty() || self.id == 0{
-            return msg_id
+    pub async fn send(mut self) -> Result<Self> {
+        if self.text.is_empty() || self.chat_id == 0 {
+            bail!("无法发送空消息")
         }
         let client = Client::new();
-        let mut failed_times = 0;
-        let mut new_text = self.text.clone();
-        let mut send_ok = true;
-        loop {
-            if send_ok {
-                if new_text.chars().count() > 4096 {
-                    if self.draft.is_empty() {
-                        self.text = unicode_slice(&new_text, 0, 4096);
-                        new_text = unicode_slice(&new_text, 4096, usize::MAX);
-                    } else {
-                        self.text = unicode_slice(&new_text, new_text.chars().count() - 4096, usize::MAX);
-                        new_text = "".to_string();
-                    }
-                } else {
-                    self.text = new_text;
-                    new_text = "".to_string();
-                }
-            }
-            let mut body = json!({
-            "chat_id": self.id,
+        let body = json!({
+            "chat_id": self.chat_id,
             "text": self.text,
-            "parse_mode": self.parse_mode
-            });
-            if !self.draft.is_empty() {
-                body["draft_id"] = json!(1)
-            }
-            let mut status = json!( { "ok": false } );
-            if let Ok(result) = client.post(format!("{}{}/SendMessage{}",*BOT_BASE_URL, *BOT_TOKEN, self.draft)).json(&body).send().await && let Ok(resp) = result.json().await {
-                status = resp;
-            } else {
-                failed_times += 1
-            }
-            if failed_times > 1 {
-                return vec![9999999]
-            }
-            let status_ok = status["ok"].as_bool().unwrap_or(false);
-            if !status_ok {
-                if let Some(p) = status.get("description") {
-                    if p.to_string().contains("parse") {
-                        self.parse_mode = "".to_string();
-                        if !self.draft.is_empty() {
-                            break;
-                        }
-                        println!("{}", status);
-                        println!("重新发送❌❌");
-                        send_ok = false;
-                    } else if p.to_string().contains("empty") {
-                        println!("无法发送空消息❎");
-                        break
-                    } else {
-                        println!("{}", status);
-                        println!("❌消息发送失败！\ndescription: {}", &p.to_string());
-                    }
-                }
-            } else {
-                send_ok = true;
-                if !self.draft.is_empty() {
-                    println!("ok......");
-                } else {
-                    println!("发送成功");
-                }
-                msg_id.push(status["result"]["message_id"].as_u64().unwrap_or_default());
-                if self.do_clear {
-                    clear_up(self.id, msg_id.clone(), 3, true);
-                }
-                if new_text.is_empty() {
-                    break
-                }
-            }
-        }
-        if msg_id.is_empty() {
-            vec![9999999]
-        } else {
-            msg_id
+            "parse_mode": self.parse_mode,
+        });
+        let result = client.post(format!("{}{}/SendMessage",*BOT_BASE_URL, *BOT_TOKEN)).json(&body).send().await?;
+        let response: Value = result.json().await?;
+        _ = response["ok"].as_bool().unwrap();
+        match response["result"]["message_id"].as_u64() {
+            Some(id) => {
+                self.msg_id = Some(id);
+                Ok(self)
+            },
+            None => bail!("发送失败"),
         }
     }
 }
 
-pub fn clear_up(chat_id: i64, ids: Vec<u64>, delay_secs: u64, should_save: bool) {
+pub fn delete_msg(chat_id: i64, ids: Vec<u64>, delay_secs: u64, should_save: bool) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
