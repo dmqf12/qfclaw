@@ -86,12 +86,12 @@ pub async fn deal_callback(chat_id: i64, msg: &Value) -> Result<bool> {
     if text.contains("reasoning") {
         if text.contains("set") {
             if text.contains("draft") {
-                delete_msg(chat_id, vec!(msg_id), 0, true);
+                delete_msg(chat_id, vec!(msg_id), 0);
                 _ = send_inline(chat_id, "请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_draft_enabled"}, {"text": "适应", "callback_data": "reasoning_draft_adaptive"}] ])).await;
             }
             if text.contains("fold") {
-                delete_msg(chat_id, vec!(msg_id), 0, true);
+                delete_msg(chat_id, vec!(msg_id), 0);
                 _ = send_inline(chat_id, "请选择推理模式", json!([
             [{"text": "开启", "callback_data": "reasoning_fold_enabled"}, {"text": "适应", "callback_data": "reasoning_fold_adaptive"}] ])).await;
             }
@@ -103,12 +103,14 @@ pub async fn deal_callback(chat_id: i64, msg: &Value) -> Result<bool> {
             .and_then(|file| serde_json::from_reader(file).ok())
             .unwrap_or_else(|| json!({}));
         let params: Vec<&str> = text.split("_").collect();
-        models["config"]["reasoning"] = json!(&params[1]);
-        models["config"]["show_reasoning"] = json!(&params[2]);
+        models["config"]["reasoning"] = json!(&params[2]);
+        models["config"]["show_reasoning"] = json!(&params[1]);
         serde_json::to_writer_pretty(fs::File::create(models_file)?, &models)?;
         reply_callback(&callback_id).await;
-        delete_msg(chat_id, vec!(msg_id), 0, true);
+        delete_msg(chat_id, vec!(msg_id), 0);
         _ = MsgBuilder::new("✅操作成功").send().await?.delete(3);
+    } else if text.contains("manage") {
+
     }
     Ok(true)
 }
@@ -148,7 +150,15 @@ pub async fn send_inline(chat_id: i64, text: &str, inline_keyboard: Value) -> Re
 //     s[start_byte..end_byte].to_string()
 // }
 
-
+pub async fn set_my_commands() -> Result<()> {
+    let commands = qffunc::read_json("config/bot.json", "commands")?;
+    Client::new()
+        .post(format!("{}{}/setMyCommands", *BOT_BASE_URL, *BOT_TOKEN))
+        .json(&json!({"commands":commands}))
+        .send()
+        .await?;
+    Ok(())
+}
 
 pub struct MsgBuilder {
     pub text: String,
@@ -162,7 +172,7 @@ impl MsgBuilder {
         MsgBuilder {
             text: text.to_string(),
             chat_id: *ALLOW_USER_ID,
-            parse_mode: String::from("Markdown"),
+            parse_mode: String::from(""),
             msg_id: None,
         }
     }
@@ -176,11 +186,11 @@ impl MsgBuilder {
         self.parse_mode = "MarkdownV2".to_string();
         self
     }
-    pub fn delete(self, delay: u64) -> Result<()> {
+    pub fn delete(self, delay: u64) -> Self {
         if let Some(msg_id) = self.msg_id {
-            delete_msg(self.chat_id, vec![msg_id], delay, true);
+            delete_msg(self.chat_id, vec![msg_id], delay);
         }
-        Ok(())
+        self
     }
 
     pub async fn send(mut self) -> Result<Self> {
@@ -201,40 +211,24 @@ impl MsgBuilder {
                 self.msg_id = Some(id);
                 Ok(self)
             },
-            None => bail!("发送失败"),
+            None => {
+                qffunc::print_json(&response);
+                bail!("发送失败");
+            }
         }
     }
 }
 
-pub fn delete_msg(chat_id: i64, ids: Vec<u64>, delay_secs: u64, should_save: bool) {
+pub fn delete_msg(chat_id: i64, ids: Vec<u64>, delay_secs: u64) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
         let client = Client::new();
         let mut body = json!({"chat_id": chat_id});
-        let mut session: Value = if should_save {
-            fs::File::open(format!("messages/{}_session.json", chat_id))
-                .ok()
-                .and_then(|file| serde_json::from_reader(file).ok())
-                .unwrap_or_default()
-        } else {
-            Value::Null
-        };
-        let mut cleared = if should_save {
-            session["already_cleared"].as_array().unwrap_or(&vec![]).clone()
-        } else {
-            vec![]
-        };
 
         for id in ids.iter().rev() {
             if *id > 9990000 {
                 break;
-            }
-            if should_save && cleared.contains(&json!(id)) {
-                continue;
-            }
-            if should_save {
-                cleared.push(json!(id));
             }
             body["message_id"] = json!(id);
             for attempt in 0..2 {
@@ -248,13 +242,6 @@ pub fn delete_msg(chat_id: i64, ids: Vec<u64>, delay_secs: u64, should_save: boo
                     Err(e) if attempt == 1 => eprintln!("删除 {} 失败: {e}", id),
                     Err(e) => eprintln!("删除 {} 重试 {}: {e}", id, attempt + 1),
                 }
-            }
-        }
-
-        if should_save {
-            session["already_cleared"] = json!(cleared);
-            if let Ok(file) = fs::File::create(format!("messages/{}_session.json", chat_id)) {
-                _ = serde_json::to_writer_pretty(file, &session);
             }
         }
     });

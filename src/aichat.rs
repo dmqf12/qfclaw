@@ -1,6 +1,6 @@
 use std::fs;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail };
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -34,7 +34,6 @@ struct ChatRequest {
     base_url: String,
     api_key: String,
     model: String,
-    stream: String,
     thinking: String,
     messages: Vec<Value>,
     tools: Value,
@@ -46,7 +45,6 @@ impl ChatRequest {
     async fn send(&self) -> Result<Value> {
         let payload = json!({
             "model": &self.model,
-            "stream": &self.stream,
             "thinking": {"type": &self.thinking},
             "messages": &self.messages,
             "tools": &self.tools,
@@ -87,15 +85,14 @@ fn build_system_prompt() -> String {
         .join("\n")
 }
 
-fn chat_init(chat_id: i64, user_input: &str) -> Result<ChatRequest> {
+fn chat_init(user_input: &str) -> Result<ChatRequest> {
     println!("{}", user_input);
     if user_input.is_empty() {
         return Err(anyhow!("空消息"));
     }
     //  检查对话记录
-    let messages_path = "messages/";
-    fs::create_dir_all(messages_path)?; // 已存在时不会报错
-    let msg_file = format!("{}/{}_messages.json", messages_path, chat_id);
+    fs::create_dir_all("messages")?; // 已存在时不会报错
+    let msg_file = format!("messages/{}.json", get_session_id()?);
     let mut messages: Vec<Value> =  match qffunc::file_to_json(&msg_file) {
         Ok(resp) => resp.as_array().cloned().unwrap_or_default(),
         Err(_) => vec![],
@@ -130,7 +127,6 @@ fn chat_init(chat_id: i64, user_input: &str) -> Result<ChatRequest> {
         .as_str()
         .unwrap_or("https://api.deepseek.com/v1");
     let model_name = model["model_name"].as_str().unwrap_or_default();
-    let stream: bool = model_config["stream"].as_bool().unwrap_or(true);
     let reasoning = model_config["reasoning"].as_str().unwrap_or("disabled");
     messages.push(json!({"role": "user", "content": user_input}));
 
@@ -141,7 +137,6 @@ fn chat_init(chat_id: i64, user_input: &str) -> Result<ChatRequest> {
     //  发送并保存模型输出
     Ok(ChatRequest {
         model: model_name.to_string(),
-        stream: stream.to_string(),
         thinking: reasoning.to_string(),
         messages: messages,
         tools: func,
@@ -154,16 +149,14 @@ fn chat_init(chat_id: i64, user_input: &str) -> Result<ChatRequest> {
 
 fn 记录token(total_tokens: u64) -> Result<()> {
     let session_file = "messages/session.json";
-    let mut session: Value = fs::File::open(session_file)
-        .ok()
-        .and_then(|file| serde_json::from_reader(file).ok())
-        .unwrap_or_default();
-    session["total_tokens"] = json!(total_tokens);
-    serde_json::to_writer_pretty(fs::File::create(session_file)?, &session)?;
+    let session_id = get_session_id()?;
+    let mut session_info = qffunc::file_to_json("messages/session.json")?;
+    session_info[&session_id]["tokens"] = json!(total_tokens);
+    serde_json::to_writer_pretty(fs::File::create(session_file)?, &session_info)?;
     Ok(())
 }
 fn 保存消息(messages: &[Value]) -> Result<()> {
-    let msg_file = format!("messages/messages.json");
+    let msg_file = format!("messages/{}.json", get_session_id()?);
     serde_json::to_writer_pretty(
         fs::File::create(format!("{}.tmp", msg_file))?,
         &messages[1..],
@@ -172,9 +165,16 @@ fn 保存消息(messages: &[Value]) -> Result<()> {
     Ok(())
 }
 
+pub fn get_session_id() -> Result<String> {
+    let session_id = qffunc::read_json("messages/session.json", "session_now")?;
+    match session_id.as_str() {
+        Some(resp) => Ok(resp.to_string()),
+        None => bail!("未找到session_now"),
+    }
+}
 
 pub async fn main(chat_id: i64, user_input: &str, mut rx: mpsc::Receiver<String>) -> Result<()> {
-    let mut chat_request = chat_init(chat_id, user_input)?;
+    let mut chat_request = chat_init(user_input)?;
 
     // --- 创建 mpsc 通道用于发送 ToolRequest 给后台任务 ---
     let (tool_tx, tool_rx) = mpsc::channel::<ToolRequest>(32);

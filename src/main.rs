@@ -51,13 +51,13 @@ async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
             continue;
         }
 
-        if ["/new", "/clear", "/restart", "/status", "/reasoning"]
+        if ["/session", "/new", "/clear", "/name", "/restart", "/status", "/reasoning"]
             .iter()
-            .any(|&cmd| user_input.as_str().contains(cmd))
+            .any(|&cmd| user_input.as_str().starts_with(cmd))
         {
             tokio::spawn(async move {
-                if command::exec_cmd(chat_id, &user_input, &payload).await.is_err() {
-                    _ = MsgBuilder::new("❌指令执行失败").send().await;
+                if let Err(e) = command::exec_cmd(chat_id, &user_input).await {
+                    _ = MsgBuilder::new(&format!("指令执行失败: {}", e.to_string())).send().await;
                 }
             });
             continue;
@@ -128,7 +128,10 @@ async fn main() {
     //  _ = MsgBuilder::new("✅启动成功").send().await;
     //  let _ = command::exec_cmd("/status", &Value::Null).await;
     _ = std::fs::remove_dir_all("qfclawtask");
-
+    match telegram::set_my_commands().await {
+        Ok(_) => println!("指令注册成功"),
+        Err(_) => println!("指令注册失败"),
+    }
     // 创建通道
     let (tx, rx) = mpsc::channel(32);
 

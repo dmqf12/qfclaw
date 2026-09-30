@@ -2,5 +2,15 @@
     "token": "",
     "bot_id": 0,
     "allow_user_id": 0,
-    "base_url": "https://api.telegram.org/bot"
+    "base_url": "https://api.telegram.org/bot",
+    "commands": [
+      { "command": "new", "description": "✅开启新会话" },
+      { "command": "name", "description": "✏️修改会话标题" },
+      { "command": "session", "description": "🔶管理会话" },
+      { "command": "clear", "description": "🧹删除指定会话" },
+      { "command": "status", "description": "📊查看当前状态" },
+      { "command": "reasoning", "description": "🧠选择推理模式" },
+      { "command": "stop", "description": "⏹️停止所有任务" },
+      { "command": "restart", "description": "🔄重新启动网关" }
+    ]
 }
