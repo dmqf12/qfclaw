@@ -1,144 +1,152 @@
-mod aichat;
-mod toolcall;
-mod command;
-pub mod telegram;
-use crate::telegram::*;
-use serde_json::{Value};
-use std::time::Duration;
+mod channel;
+mod config;
+mod core;
+mod tool;
+
+use std::sync::Arc;
+
+use channel::telegram::{TelegramChannel, TelegramConfig};
+use channel::{Channel, InboundMessage, MsgKind, OutboundMessage};
+use core::{agent, command};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
+/// 正在运行的对话任务：句柄、消息注入通道、取消令牌。
+type RunningTask = (JoinHandle<()>, mpsc::Sender<String>, CancellationToken);
 
-//  fn deal_file(msg: Value)
-fn get_msg(msg: &Value) -> (String, i64) {
-    qffunc::print_json(msg);
-    let text = msg["message"]["text"].as_str().unwrap_or("").to_string();
-    let chat_id = msg["message"]["chat"]["id"].as_i64().unwrap_or(*ALLOW_USER_ID);
-    (text, chat_id)
-}
+/// 分发收到的消息：白名单校验 + 斜杠指令 + 单任务调度。
+///
+/// 同一时刻只运行一个对话任务；任务运行期间再收到消息，则通过通道注入，
+/// 由对话循环在下一轮请求前合并处理（实现「打断」效果）。
+async fn handle_msg(
+    channel: Arc<dyn Channel>,
+    allow_id: String,
+    mut rx: mpsc::Receiver<InboundMessage>,
+) {
+    let mut current_task: Option<RunningTask> = None;
 
-async fn handle_msg(mut rx: mpsc::Receiver<Value>) {
-    // 在循环外定义，以维持单任务状态
-    let mut current_task: Option<(tokio::task::JoinHandle<()>, mpsc::Sender<String>)> = None;
+    while let Some(msg) = rx.recv().await {
+        let chat_id = msg.chat_id.clone();
 
-    while let Some(payload) = rx.recv().await {
-        let (user_input, chat_id) = get_msg(&payload);
-        let allow_user_id: i64 = *ALLOW_USER_ID;
-        if allow_user_id != chat_id {
-            _ = MsgBuilder::new(&format!("不在白名单，您的id：\n      {}", chat_id))
-                .id(chat_id)
-                .send()
+        // 白名单校验
+        if msg.user_id != allow_id {
+            let _ = channel
+                .send(
+                    OutboundMessage::text(
+                        chat_id,
+                        format!("不在白名单，您的id：\n      {}", msg.user_id),
+                    )
+                    .kind(MsgKind::Error),
+                )
                 .await;
             continue;
         }
 
-        if payload.get("callback_query").is_some() {
-            if let Err(e) = deal_callback(chat_id, &payload).await {
-                println!("{}", e)
+        // 按钮回调交给指令模块
+        if let Some(callback) = &msg.callback {
+            if let Err(e) = command::deal_callback(channel.clone(), &chat_id, callback).await {
+                eprintln!("处理回调失败: {e}");
             }
             continue;
         }
 
-        if user_input.is_empty() {
+        let input = msg.content.as_text().to_string();
+        if input.is_empty() {
             continue;
         }
-        if user_input == "/stop" {
-            if let Some((handle, _)) = current_task.take() {
+
+        // 停止当前任务
+        if input == "/stop" {
+            if let Some((handle, _, token)) = current_task.take() {
+                token.cancel();
                 handle.abort();
-                _ = MsgBuilder::new("🛑 任务已停止").id(chat_id).send().await;
+                let _ = channel
+                    .send(OutboundMessage::text(chat_id, "🛑 任务已停止"))
+                    .await;
             } else {
-                _ = MsgBuilder::new("⚠️ 当前没有正在运行的任务").id(chat_id).send().await;
+                let _ = channel
+                    .send(OutboundMessage::text(chat_id, "⚠️ 当前没有正在运行的任务"))
+                    .await;
             }
             continue;
         }
 
+        // 斜杠指令
         if ["/session", "/new", "/clear", "/name", "/restart", "/status", "/reasoning"]
             .iter()
-            .any(|&cmd| user_input.as_str().starts_with(cmd))
+            .any(|cmd| input.starts_with(cmd))
         {
+            let channel = channel.clone();
+            let chat_id = chat_id.clone();
+            let cmd = input.clone();
             tokio::spawn(async move {
-                if let Err(e) = command::exec_cmd(chat_id, &user_input).await {
-                    _ = MsgBuilder::new(&format!("指令执行失败: {}", e.to_string())).send().await;
+                if let Err(e) = command::exec_cmd(channel.clone(), &chat_id, &cmd).await {
+                    let _ = channel
+                        .send(
+                            OutboundMessage::text(chat_id, format!("指令执行失败: {e}"))
+                                .kind(MsgKind::Error),
+                        )
+                        .await;
                 }
             });
             continue;
         }
 
-        // --- 核心逻辑修改：管理单任务后台进程 ---
-
-        // 1. 检查当前任务是否已运行结束（如果是，则重置）
-        if let Some((handle, _)) = &current_task && handle.is_finished() {
+        // 单任务调度
+        if let Some((handle, _, _)) = &current_task
+            && handle.is_finished()
+        {
             current_task = None;
         }
 
-        // 2. 如果没有任务正在运行，则启动它
         if current_task.is_none() {
             let (tx, rx_chat) = mpsc::channel::<String>(32);
-            let first_input = user_input.clone();
+            let channel = channel.clone();
+            let chat_id = chat_id.clone();
+            let first_input = input.clone();
+            let token = CancellationToken::new();
+            let child_token = token.clone();
             let handle = tokio::spawn(async move {
-                // 假设 aichat::main 现在接收 rx_chat
-                if let Err(e) = aichat::main(chat_id, &first_input, rx_chat).await {
-                    _ = MsgBuilder::new(&e.to_string()).send().await;
+                if let Err(e) =
+                    agent::main(channel, chat_id, &first_input, rx_chat, child_token).await
+                {
+                    eprintln!("对话失败: {e}");
                 }
             });
-            current_task = Some((handle, tx));
-        } else if let Some((_, tx)) = &current_task {
-            // 3. 如果任务已在运行，通过通道发送新消息
-            let _ = tx.send(user_input).await;
+            current_task = Some((handle, tx, token));
+        } else if let Some((_, tx, _)) = &current_task {
+            let _ = tx.send(input).await;
         }
-    }
-}
-
-
-async fn getupdates_receive(tx: mpsc::Sender<Value>) {
-    let client = reqwest::Client::new();
-    let mut last_update_id = 1;
-    let timeout = 60;
-    loop {
-        let url = format!(
-            "{}{}/getUpdates?limit=1&offset={}&timeout={}",
-            *BOT_BASE_URL,
-            *BOT_TOKEN, last_update_id, timeout
-        );
-        match client.get(&url).timeout(Duration::from_secs(65)).send().await {
-            Ok(response) => match response.json::<Value>().await {
-                Ok(json_response) => {
-                    if let Some(results) = json_response["result"].as_array() {
-                        if results.is_empty() {
-                            println!("暂无消息");
-                        }
-                        for update in results {
-                            if let Some(id) = update["update_id"].as_i64() {
-                                last_update_id = id + 1;
-                            }
-                            //    print_json(&update);
-                            let _ = tx.send(update.clone()).await;
-                        }
-                    }
-                }
-                Err(e) => eprintln!("JSON parse error: {}", e),
-            },
-            Err(e) => println!("Request error: {}", e),
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
 #[tokio::main]
 async fn main() {
-    //  _ = MsgBuilder::new("✅启动成功").send().await;
-    //  let _ = command::exec_cmd("/status", &Value::Null).await;
-    _ = std::fs::remove_dir_all("qfclawtask");
-    match telegram::set_my_commands().await {
+    let _ = std::fs::remove_dir_all("qfclawtask");
+
+    let cfg = config::BotConfig::load();
+    let allow_id = cfg.allow_user_id.clone();
+    let channel: Arc<dyn Channel> = Arc::new(TelegramChannel::new(
+        TelegramConfig::new(cfg.token)
+            .base_url(cfg.base_url)
+            .commands(cfg.commands),
+    ));
+
+    match channel.init().await {
         Ok(_) => println!("指令注册成功"),
-        Err(_) => println!("指令注册失败"),
+        Err(e) => println!("指令注册失败: {e}"),
     }
-    // 创建通道
+
     let (tx, rx) = mpsc::channel(32);
 
-    // 启动后台任务
-    let handle_updates = tokio::spawn(getupdates_receive(tx));
-    let handle_messages = tokio::spawn(handle_msg(rx));
+    let run_channel = channel.clone();
+    let handle_updates = tokio::spawn(async move {
+        if let Err(e) = run_channel.run(tx).await {
+            eprintln!("接收循环退出: {e}");
+        }
+    });
+    let handle_messages = tokio::spawn(handle_msg(channel.clone(), allow_id, rx));
 
-    // 等待任务完成（实际上会一直运行）
     let _ = tokio::join!(handle_updates, handle_messages);
 }
