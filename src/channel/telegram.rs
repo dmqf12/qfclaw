@@ -15,52 +15,33 @@ use tokio::sync::mpsc;
 
 use super::{Button, Callback, Channel, Content, InboundMessage, MsgId, OutboundMessage};
 
-/// Telegram Bot 配置。
-#[derive(Debug, Clone)]
-pub struct TelegramConfig {
-    pub token: String,
-    /// API 根地址，默认 `https://api.telegram.org/bot`。
-    pub base_url: String,
-    /// 启动时注册的菜单命令。
-    pub commands: Vec<Value>,
-}
-
-impl TelegramConfig {
-    pub fn new(token: impl Into<String>) -> Self {
-        Self {
-            token: token.into(),
-            base_url: "https://api.telegram.org/bot".to_string(),
-            commands: Vec::new(),
-        }
-    }
-
-    pub fn base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
-        self
-    }
-
-    pub fn commands(mut self, commands: Vec<Value>) -> Self {
-        self.commands = commands;
-        self
-    }
-}
 
 /// Telegram 平台。
 pub struct TelegramChannel {
     token: String,
     base_url: String,
     commands: Vec<Value>,
+    allow_user_id: String,
     client: Client,
 }
 
 impl TelegramChannel {
-    pub fn new(config: TelegramConfig) -> Self {
-        Self {
-            token: config.token,
-            base_url: config.base_url,
-            commands: config.commands,
-            client: Client::new(),
+    pub fn new() -> Result<Self> {
+        let json: Value = qffunc::read_json("config/bot.json", "telegram")?;
+        let token = json["token"].as_str().unwrap_or_default();
+        if token.is_empty() {
+            bail!("未找到token")
         }
+        Ok(Self {
+            token: token.to_string(),
+            base_url: json["base_url"]
+                .as_str()
+                .unwrap_or("https://api.telegram.org/bot")
+                .to_string(),
+            commands: json["commands"].as_array().cloned().unwrap_or_default(),
+            allow_user_id: json["allow_user_id"].as_i64().unwrap_or(0).to_string(),
+            client: Client::new(),
+        })
     }
 
     /// 调用 Bot API，成功时返回完整响应。
@@ -133,10 +114,8 @@ impl Channel for TelegramChannel {
                                     offset = id + 1;
                                 }
                                 // 回调需要立即回执，否则客户端一直转圈
-                                if let Some(cq) = update.get("callback_query") {
-                                    if let Some(cid) = cq["id"].as_str() {
-                                        self.answer_callback(cid).await;
-                                    }
+                                if let Some(cq) = update.get("callback_query") && let Some(cid) = cq["id"].as_str() {
+                                    self.answer_callback(cid).await
                                 }
                                 if let Some(msg) = parse_update(update) {
                                     let _ = tx.send(msg).await;
@@ -177,9 +156,11 @@ impl Channel for TelegramChannel {
     }
 
     async fn delete(&self, chat_id: &str, id: &str) -> Result<()> {
-        self.api("deleteMessage", &json!({ "chat_id": chat_id, "message_id": id }))
-            .await?;
+        self.delete_after(chat_id, id, 0);
         Ok(())
+    }
+    fn get_allow_id(&self) -> String {
+        self.allow_user_id.clone()
     }
 }
 

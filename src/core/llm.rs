@@ -61,10 +61,10 @@ impl ChatRequest {
             "max_tokens": &self.max_tokens
         });
         let client = Client::new();
-        let url = format!("{}/chat/completions", &self.base_url);
+        let url = format!("{}/chat/completions", self.base_url);
         let response = client
             .post(url)
-            .header("Authorization", format!("Bearer {}", &self.api_key))
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&payload)
             .send()

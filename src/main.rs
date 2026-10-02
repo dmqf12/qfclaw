@@ -5,7 +5,7 @@ mod tool;
 
 use std::sync::Arc;
 
-use channel::telegram::{TelegramChannel, TelegramConfig};
+use channel::*;
 use channel::{Channel, InboundMessage, MsgKind, OutboundMessage};
 use core::{agent, command};
 use tokio::sync::mpsc;
@@ -21,7 +21,6 @@ type RunningTask = (JoinHandle<()>, mpsc::Sender<String>, CancellationToken);
 /// 由对话循环在下一轮请求前合并处理（实现「打断」效果）。
 async fn handle_msg(
     channel: Arc<dyn Channel>,
-    allow_id: String,
     mut rx: mpsc::Receiver<InboundMessage>,
 ) {
     let mut current_task: Option<RunningTask> = None;
@@ -30,7 +29,7 @@ async fn handle_msg(
         let chat_id = msg.chat_id.clone();
 
         // 白名单校验
-        if msg.user_id != allow_id {
+        if msg.user_id != channel.get_allow_id() {
             let _ = channel
                 .send(
                     OutboundMessage::text(
@@ -125,28 +124,28 @@ async fn handle_msg(
 async fn main() {
     let _ = std::fs::remove_dir_all("qfclawtask");
 
-    let cfg = config::BotConfig::load();
-    let allow_id = cfg.allow_user_id.clone();
-    let channel: Arc<dyn Channel> = Arc::new(TelegramChannel::new(
-        TelegramConfig::new(cfg.token)
-            .base_url(cfg.base_url)
-            .commands(cfg.commands),
-    ));
-
-    match channel.init().await {
-        Ok(_) => println!("指令注册成功"),
-        Err(e) => println!("指令注册失败: {e}"),
-    }
-
-    let (tx, rx) = mpsc::channel(32);
-
-    let run_channel = channel.clone();
-    let handle_updates = tokio::spawn(async move {
-        if let Err(e) = run_channel.run(tx).await {
-            eprintln!("接收循环退出: {e}");
+    for cfg_init in [telegram::TelegramChannel::new()] {
+        let channel: Arc<dyn Channel>;
+        if let Ok(cfg) = cfg_init {
+            channel = Arc::new(cfg);
+        } else {
+            continue;
         }
-    });
-    let handle_messages = tokio::spawn(handle_msg(channel.clone(), allow_id, rx));
+        match channel.init().await {
+            Ok(_) => println!("指令注册成功"),
+            Err(e) => println!("指令注册失败: {e}"),
+        }
 
-    let _ = tokio::join!(handle_updates, handle_messages);
+        let (tx, rx) = mpsc::channel(32);
+
+        let run_channel = channel.clone();
+        let handle_updates = tokio::spawn(async move {
+            if let Err(e) = run_channel.run(tx).await {
+                eprintln!("接收循环退出: {e}");
+            }
+        });
+        let handle_messages = tokio::spawn(handle_msg(channel.clone(), rx));
+
+        let _ = tokio::join!(handle_updates, handle_messages);
+    }
 }

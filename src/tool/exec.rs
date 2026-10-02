@@ -16,14 +16,6 @@ use super::task::{TASKS, TaskHandle};
 use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify};
 use crate::channel::{MsgKind, OutboundMessage};
 
-/// sudo 包装：有图形会话优先用 pkexec 弹授权窗，否则回退系统 sudo。
-const SUDO_SHIM: &str = r#"sudo() {
-  if [ -n "$DISPLAY$WAYLAND_DISPLAY" ] || [ "$XDG_SESSION_TYPE" = "wayland" ] || [ "$XDG_SESSION_TYPE" = "x11" ]; then
-    if command -v pkexec >/dev/null 2>&1; then exec pkexec "$@"; fi
-  fi
-  exec /usr/bin/sudo "$@"
-}"#;
-
 pub struct ExecTool;
 
 /// 命令的结束方式。
@@ -105,7 +97,7 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         .status()
         .await;
     let exec_content =
-        format!("source workspace/pyvenv/bin/activate\n{SUDO_SHIM}\n{cmd_text}\nunset -f sudo");
+        format!("source workspace/pyvenv/bin/activate\n{cmd_text}");
     _ = fs::write(format!("{abs_task_dir}/exec.sh"), exec_content);
     let _ = Command::new("chmod")
         .args(["+x", &format!("{abs_task_dir}/exec.sh")])

@@ -162,4 +162,6 @@ pub trait Channel: Send + Sync + 'static {
 
     /// 删除消息。
     async fn delete(&self, chat_id: &str, id: &str) -> Result<()>;
+
+    fn get_allow_id(&self) -> String;
 }

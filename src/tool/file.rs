@@ -197,7 +197,7 @@ impl Tool for EditTool {
         };
 
         match content.matches(old).count() {
-            0 => return format!("❌ 未找到要替换的内容，请确认 old_string 与文件完全一致"),
+            0 => return "❌ 未找到要替换的内容，请确认 old_string 与文件完全一致".to_string(),
             1 => {}
             n => return format!("❌ old_string 匹配到 {n} 处，请提供更长的唯一上下文"),
         }
