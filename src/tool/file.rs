@@ -57,7 +57,7 @@ fn read_text(file: &str, offset: Option<usize>, limit: Option<usize>) -> String 
         if line_no < start {
             continue;
         }
-        if line_no >= start + max_lines {
+        if line_no >= start.saturating_add(max_lines) {
             truncated = true;
             break;
         }
@@ -122,6 +122,14 @@ impl Tool for FileTool {
                         "❌ 写入内容过长（{} 字符 > {MAX_WRITE_CHARS}）",
                         content.chars().count()
                     );
+                }
+                // 文件已存在时先确认不是二进制，避免覆盖破坏数据；不存在则允许新建
+                if fs::metadata(file).is_ok() {
+                    match is_binary(file) {
+                        Err(e) => return e,
+                        Ok(true) => return format!("❌ 无法写入 {file}：这是二进制文件"),
+                        Ok(false) => {}
+                    }
                 }
                 notify(ctx, &format!("✏️写入：{file}")).await;
                 match fs::write(file, content) {
