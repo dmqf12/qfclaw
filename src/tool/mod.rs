@@ -6,7 +6,7 @@
 pub mod exec;
 pub mod file;
 pub mod task;
-
+pub mod send;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::channel::{Channel, MsgKind, OutboundMessage};
 
 /// 单次工具输出的字符上限。
-pub const MAX_OUTPUT_CHARS: usize = 4_000;
+pub const MAX_OUTPUT_CHARS: usize = 8_000;
 
 /// 工具执行上下文。
 pub struct ToolContext {
@@ -53,6 +53,7 @@ impl ToolRegistry {
                 Box::new(file::EditTool),
                 Box::new(exec::ExecTool),
                 Box::new(task::TaskTool),
+                Box::new(send::SendTool),
             ],
         }
     }
@@ -85,7 +86,7 @@ pub async fn notify(ctx: &ToolContext, msg: &str) {
         .channel
         .send(
             OutboundMessage::text(ctx.chat_id.clone(), msg)
-                .kind(MsgKind::Progress)
+                .kind(MsgKind::Text)
                 .fold()
                 .ttl(5),
         )

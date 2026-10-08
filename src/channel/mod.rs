@@ -15,44 +15,16 @@ pub type MsgId = String;
 /// 会话 ID。各平台类型不同，统一为字符串。
 pub type ChatId = String;
 
-/// 消息内容。
-#[derive(Debug, Clone)]
-pub enum Content {
-    Text(String),
-}
-
-impl Content {
-    /// 取出文本内容。
-    pub fn as_text(&self) -> &str {
-        match self {
-            Content::Text(t) => t,
-        }
-    }
-}
-
-impl From<&str> for Content {
-    fn from(s: &str) -> Self {
-        Content::Text(s.to_string())
-    }
-}
-
-impl From<String> for Content {
-    fn from(s: String) -> Self {
-        Content::Text(s)
-    }
-}
-
 /// 消息用途，决定平台如何呈现。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MsgKind {
-    /// 思考 / 加载提示。
-    Thinking,
-    /// 进度提示（工具执行等）。
-    Progress,
-    /// 最终回复。
-    Final,
+    /// 文本。
+    Text,
     /// 错误提示。
     Error,
+    /// 文件。
+    File,
 }
 
 /// 内联按钮。
@@ -87,7 +59,7 @@ pub struct InboundMessage {
     /// 发送者用户 ID。
     pub user_id: String,
     pub chat_id: ChatId,
-    pub content: Content,
+    pub content: String,
     /// 若为按钮回调则为 `Some`。
     pub callback: Option<Callback>,
 }
@@ -96,7 +68,7 @@ pub struct InboundMessage {
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
     pub chat_id: ChatId,
-    pub content: Content,
+    pub content: String,
     pub kind: MsgKind,
     /// 内联按钮（按行分组）。
     pub buttons: Vec<Vec<Button>>,
@@ -108,11 +80,11 @@ pub struct OutboundMessage {
 
 impl OutboundMessage {
     /// 创建一条文本消息。
-    pub fn text(chat_id: impl Into<ChatId>, text: impl Into<Content>) -> Self {
+    pub fn text(chat_id: impl Into<ChatId>, text: &str) -> Self {
         Self {
             chat_id: chat_id.into(),
             content: text.into(),
-            kind: MsgKind::Final,
+            kind: MsgKind::Text,
             buttons: Vec::new(),
             fold: false,
             ttl: None,

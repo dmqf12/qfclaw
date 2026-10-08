@@ -34,7 +34,7 @@ async fn handle_msg(
                 .send(
                     OutboundMessage::text(
                         chat_id,
-                        format!("不在白名单，您的id：\n      {}", msg.user_id),
+                        &format!("不在白名单，您的id：\n      {}", msg.user_id),
                     )
                     .kind(MsgKind::Error),
                 )
@@ -50,13 +50,12 @@ async fn handle_msg(
             continue;
         }
 
-        let input = msg.content.as_text().to_string();
-        if input.is_empty() {
+        if msg.content.is_empty() {
             continue;
         }
 
         // 停止当前任务
-        if input == "/stop" {
+        if msg.content == "/stop" {
             if let Some((handle, _, token)) = current_task.take() {
                 token.cancel();
                 handle.abort();
@@ -74,16 +73,16 @@ async fn handle_msg(
         // 斜杠指令
         if ["/session", "/new", "/clear", "/name", "/restart", "/status", "/reasoning"]
             .iter()
-            .any(|cmd| input.starts_with(cmd))
+            .any(|cmd| msg.content.starts_with(cmd))
         {
             let channel = channel.clone();
             let chat_id = chat_id.clone();
-            let cmd = input.clone();
+            let cmd = msg.content.clone();
             tokio::spawn(async move {
                 if let Err(e) = command::exec_cmd(channel.clone(), &chat_id, &cmd).await {
                     let _ = channel
                         .send(
-                            OutboundMessage::text(chat_id, format!("指令执行失败: {e}"))
+                            OutboundMessage::text(chat_id, &format!("指令执行失败: {e}"))
                                 .kind(MsgKind::Error),
                         )
                         .await;
@@ -103,19 +102,22 @@ async fn handle_msg(
             let (tx, rx_chat) = mpsc::channel::<String>(32);
             let channel = channel.clone();
             let chat_id = chat_id.clone();
-            let first_input = input.clone();
+            let first_input = msg.content.clone();
             let token = CancellationToken::new();
             let child_token = token.clone();
             let handle = tokio::spawn(async move {
                 if let Err(e) =
-                    agent::main(channel, chat_id, &first_input, rx_chat, child_token).await
+                    agent::main(channel.clone(), chat_id.clone(), &first_input, rx_chat, child_token).await
                 {
                     eprintln!("对话失败: {e}");
+                    _ = channel
+                        .send(OutboundMessage::text(chat_id.clone(), &format!("对话失败: {e}")).kind(MsgKind::Error))
+                        .await;
                 }
             });
             current_task = Some((handle, tx, token));
         } else if let Some((_, tx, _)) = &current_task {
-            let _ = tx.send(input).await;
+            let _ = tx.send(msg.content).await;
         }
     }
 }

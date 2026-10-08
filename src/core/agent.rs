@@ -96,20 +96,20 @@ pub async fn main(
     let mut chat_request = ChatRequest::init(user_input)?;
 
     loop {
-        let _ = channel
+        channel
             .send(
                 OutboundMessage::text(chat_id.clone(), "🧠思考中...")
-                    .kind(MsgKind::Thinking)
+                    .kind(MsgKind::Text)
                     .ttl(3),
             )
-            .await;
+            .await?;
 
         let reply: Value = match chat_request.send().await {
             Ok(resp) => resp,
             Err(e) => {
                 let _ = channel
-                    .send(OutboundMessage::text(chat_id.clone(), e.to_string()).kind(MsgKind::Error))
-                    .await;
+                    .send(OutboundMessage::text(chat_id.clone(), &e.to_string()).kind(MsgKind::Error))
+                    .await?;
                 break;
             }
         };
@@ -118,9 +118,9 @@ pub async fn main(
         session::record_tokens(total_tokens)?;
 
         if !content.is_empty() {
-            let _ = channel
-                .send(OutboundMessage::text(chat_id.clone(), content.clone()))
-                .await;
+            channel
+                .send(OutboundMessage::text(chat_id.clone(), &content))
+                .await?;
         }
 
         let mut messages = chat_request.messages.clone();

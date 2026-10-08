@@ -84,8 +84,8 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
     let msg_id = ctx
         .channel
         .send(
-            OutboundMessage::text(ctx.chat_id.clone(), start_msg)
-                .kind(MsgKind::Progress)
+            OutboundMessage::text(ctx.chat_id.clone(), &start_msg)
+                .kind(MsgKind::Text)
                 .fold(),
         )
         .await

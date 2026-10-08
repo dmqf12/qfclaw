@@ -23,9 +23,9 @@ fn date_now() -> String {
 }
 
 /// 发送一条文本消息。
-async fn reply(channel: &Arc<dyn Channel>, chat_id: &str, text: impl Into<Content>) -> Result<MsgId> {
+async fn reply(channel: &Arc<dyn Channel>, chat_id: &str, text: &str) -> Result<MsgId> {
     channel
-        .send(OutboundMessage::text(chat_id.to_string(), text))
+        .send(OutboundMessage::text(chat_id.to_string(), text).kind(MsgKind::Error))
         .await
 }
 
@@ -50,14 +50,13 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
     let args: Vec<&str> = cmd_text.split_whitespace().collect();
 
     if cmd_text == "/new" {
-        fs::create_dir_all("messages/archive")?;
         let mut session_info = qffunc::file_to_json(SESSION_FILE).unwrap_or(json!({}));
         let session_title = args.get(1).copied().unwrap_or("无标题");
         let date = date_now();
         session_info["session_now"] = json!(date);
         session_info[&date] = json!({ "title": session_title });
         qffunc::json_to_file(SESSION_FILE, &session_info)?;
-        reply(&channel, chat_id, format!("✅ New session {date} started")).await?;
+        reply(&channel, chat_id, &format!("✅ New session {date} started")).await?;
         return Ok(true);
     }
 
@@ -84,7 +83,7 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
             .send(
                 OutboundMessage::text(
                     chat_id.to_string(),
-                    format!(
+                    &format!(
                         "📚 Context: {:.1}K/1M ({:.1}%)",
                         n as f64 / 1000.0,
                         n as f64 / 10000.
@@ -114,7 +113,28 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
     if cmd_text.contains("/session") {
         match args.len() {
             1 => {
-                reply(&channel, chat_id, fs::read_to_string(SESSION_FILE)?).await?;
+                reply(&channel, chat_id, &fs::read_to_string(SESSION_FILE)?).await?;
+            }
+            2 => {
+                let session_id = match args.get(1) {
+                    Some(id) => *id,
+                    None => bail!("错误的参数"),
+                };
+                let mut session_info = qffunc::file_to_json(SESSION_FILE)?;
+                let session_now = match session_info["session_now"].as_str() {
+                    Some(resp) => resp.to_string(),
+                    None => date_now(),
+                };
+                if session_info.get(session_id).is_none() && session_now != session_id {
+                    bail!(format!("未找到会话：{}", session_id))
+                }
+                if session_now != session_id {
+                    session_info["session_now"] = json!(session_id);
+                    qffunc::json_to_file(SESSION_FILE, &session_info)?;
+                    reply(&channel, chat_id, &format!("成功切换至{}", session_id)).await?;
+                } else {
+                    bail!(format!("{}已是当前会话", session_id))
+                }
             }
             _ => {
                 let session_id = match args.get(2) {
@@ -134,16 +154,8 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
                 match session_op {
                     "switch" => {
                         if session_now != session_id {
-                            fs::rename(
-                                format!("{}{}.json", MESSAGE_PATH, session_id),
-                                format!("{}archive/{}.json", MESSAGE_PATH, session_now),
-                            )?;
-                            fs::rename(
-                                format!("{}archive/{}.json", MESSAGE_PATH, session_id),
-                                format!("{}{}.json", MESSAGE_PATH, session_id),
-                            )?;
                             session_info["session_now"] = json!(session_id);
-                            reply(&channel, chat_id, format!("成功切换至{}", session_id)).await?;
+                            reply(&channel, chat_id, &format!("成功切换至{}", session_id)).await?;
                         } else {
                             bail!(format!("{}已是当前会话", session_id))
                         }
@@ -165,7 +177,7 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
                         }
                         let session_now = date_now();
                         session_info["session_now"] = json!(session_now);
-                        reply(&channel, chat_id, format!("{}: {}成功", session_id, session_op))
+                        reply(&channel, chat_id, &format!("{}: {}成功", session_id, session_op))
                             .await?;
                     }
                     "name" => {
@@ -174,7 +186,7 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
                         reply(
                             &channel,
                             chat_id,
-                            format!("{}标题成功修改为:{}", session_id, session_title),
+                            &format!("{}标题成功修改为:{}", session_id, session_title),
                         )
                         .await?;
                     }
