@@ -7,7 +7,7 @@ use std::fs;
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
-const SESSION_FILE: &str = "messages/session.json";
+const SESSION_FILE: &str = "../messages/session.json";
 
 /// 当前会话 ID。
 pub fn current_id() -> Result<String> {
@@ -20,8 +20,8 @@ pub fn current_id() -> Result<String> {
 
 /// 读取当前会话的历史消息（不含 system）。
 pub fn load_history() -> Result<Vec<Value>> {
-    fs::create_dir_all("messages")?;
-    let msg_file = format!("messages/{}.json", current_id()?);
+    fs::create_dir_all("../messages")?;
+    let msg_file = format!("../messages/{}.json", current_id()?);
     Ok(match qffunc::file_to_json(&msg_file) {
         Ok(resp) => resp.as_array().cloned().unwrap_or_default(),
         Err(_) => Vec::new(),
@@ -30,12 +30,13 @@ pub fn load_history() -> Result<Vec<Value>> {
 
 /// 保存当前会话的消息（去掉首条 system）。
 pub fn save(messages: &[Value]) -> Result<()> {
-    let msg_file = format!("messages/{}.json", current_id()?);
+    let session_id = current_id()?;
+    let msg_file = format!("../messages/{}.json", session_id);
     serde_json::to_writer_pretty(
-        fs::File::create(format!("{}.tmp", msg_file))?,
+        fs::File::create(format!("../{}.tmp", session_id))?,
         &messages[1..],
     )?;
-    fs::rename(format!("{}.tmp", msg_file), &msg_file)?;
+    fs::rename(format!("../{}.tmp", session_id), &msg_file)?;
     Ok(())
 }
 

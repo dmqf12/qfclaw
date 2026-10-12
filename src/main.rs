@@ -123,8 +123,10 @@ async fn handle_msg(
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let _ = std::fs::remove_dir_all("qfclawtask");
+    std::fs::create_dir_all("workspace/")?;
+    std::env::set_current_dir("workspace/")?;
 
     for cfg_init in [telegram::TelegramChannel::new()] {
         let channel: Arc<dyn Channel>;
@@ -150,4 +152,5 @@ async fn main() {
 
         let _ = tokio::join!(handle_updates, handle_messages);
     }
+    Ok(())
 }

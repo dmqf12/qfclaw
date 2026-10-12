@@ -82,7 +82,7 @@ impl ChatRequest {
 
 /// 拼接 system 提示（SOUL / Agent / User）。
 fn build_system_prompt() -> String {
-    let files = ["config/SOUL.md", "config/Agent.md", "config/User.md"];
+    let files = ["../config/Soul.md", "../config/Agent.md", "../config/User.md"];
     files
         .iter()
         .filter_map(|f| fs::read_to_string(f).ok())

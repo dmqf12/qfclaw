@@ -11,8 +11,8 @@ use serde_json::json;
 use crate::channel::*;
 use crate::core::session::current_id;
 
-const SESSION_FILE: &str = "messages/session.json";
-const MESSAGE_PATH: &str = "messages/";
+const SESSION_FILE: &str = "../messages/session.json";
+const MESSAGE_PATH: &str = "../messages/";
 
 fn date_now() -> String {
     SystemTime::now()
@@ -163,13 +163,13 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
                     "clear" | "archive" => {
                         if session_now != session_id {
                             _ = fs::rename(
-                                format!("{}archive/{}.json", MESSAGE_PATH, session_id),
-                                format!("{}{}/{}.json", MESSAGE_PATH, session_op, session_id),
+                                format!("../{}archive/{}.json", MESSAGE_PATH, session_id),
+                                format!("../{}{}/{}.json", MESSAGE_PATH, session_op, session_id),
                             );
                         } else {
                             _ = fs::rename(
-                                format!("{}{}.json", MESSAGE_PATH, session_id),
-                                format!("{}{}/{}.json", MESSAGE_PATH, session_op, session_id),
+                                format!("../{}{}.json", MESSAGE_PATH, session_id),
+                                format!("../{}{}/{}.json", MESSAGE_PATH, session_op, session_id),
                             );
                         }
                         if let Some(obj) = session_info.as_object_mut() {
@@ -258,7 +258,7 @@ pub async fn deal_callback(channel: Arc<dyn Channel>, chat_id: &str, cb: &Callba
     if params.len() < 3 {
         bail!("无效的回调数据: {}", data);
     }
-    let models_file = "config/models.json";
+    let models_file = "../config/models.json";
     let mut models = fs::File::open(models_file)
         .ok()
         .and_then(|file| serde_json::from_reader(file).ok())

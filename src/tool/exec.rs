@@ -10,7 +10,6 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
-use uuid::Uuid;
 
 use super::task::{TASKS, TaskHandle};
 use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify};
@@ -70,11 +69,11 @@ fn keep_latest(text: &mut String) {
 async fn run(args: &Value, ctx: &ToolContext) -> String {
     let cmd_text = args["command"].as_str().unwrap_or("");
     let timeout_secs = args["timeout"].as_u64().unwrap_or(10);
-    let task_id = Uuid::new_v4().to_string();
+    let task_id = format!("{:08x}", fastrand::u32(..));
     // 绝对路径：避免命令内 cd 切换目录后相对路径失效
     let abs_task_dir = std::env::current_dir()
         .unwrap()
-        .join("qfclawtask")
+        .join("../qfclawtask")
         .join(&task_id)
         .to_string_lossy()
         .to_string();
@@ -97,7 +96,7 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         .status()
         .await;
     let exec_content =
-        format!("source workspace/pyvenv/bin/activate\n{cmd_text}");
+        format!("source pyvenv/bin/activate\n{cmd_text}");
     _ = fs::write(format!("{abs_task_dir}/exec.sh"), exec_content);
     let _ = Command::new("chmod")
         .args(["+x", &format!("{abs_task_dir}/exec.sh")])

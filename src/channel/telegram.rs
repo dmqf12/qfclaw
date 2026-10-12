@@ -28,7 +28,7 @@ pub struct TelegramChannel {
 
 impl TelegramChannel {
     pub fn new() -> Result<Self> {
-        let json: Value = qffunc::read_json("config/bot.json", "telegram")?;
+        let json: Value = qffunc::read_json("../config/bot.json", "telegram")?;
         let token = json["token"].as_str().unwrap_or_default();
         if token.is_empty() {
             bail!("未找到token")
@@ -254,7 +254,7 @@ const PHOTO_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const FILE_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 /// file_id 缓存文件路径。
-const FILE_ID_PATH: &str = "config/telegram/file_id.json";
+const FILE_ID_PATH: &str = "../config/telegram/file_id.json";
 
 /// 串行化 file_id 缓存的读改写，避免并发发送时互相覆盖。
 static FILE_ID_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
