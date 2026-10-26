@@ -23,15 +23,17 @@ pub struct ChatRequest {
 }
 
 impl ChatRequest {
-    /// 构造请求：加载历史 + system 提示 + 用户输入。
-    pub fn init(user_input: &str) -> Result<Self> {
+    /// 构造请求：加载该会话历史 + system 提示 + 用户输入。
+    ///
+    /// `chat` 为会话键（`chat_id` 或 `chat_id:thread_id`）。
+    pub fn init(chat: &str, user_input: &str) -> Result<Self> {
         println!("{user_input}");
         if user_input.is_empty() {
             return Err(anyhow!("空消息"));
         }
         let cfg = ModelConfig::load()?;
 
-        let mut messages = session::load_history()?;
+        let mut messages = session::load_history(chat)?;
         messages.insert(
             0,
             json!({ "role": "system", "content": build_system_prompt() }),

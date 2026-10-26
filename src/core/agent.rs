@@ -2,6 +2,7 @@
 //!
 //! 请求模型 → 执行工具 → 回填结果，直到模型不再调用工具。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -15,22 +16,13 @@ use crate::core::llm::ChatRequest;
 use crate::core::session;
 use crate::tool::{ToolContext, registry};
 
-/// 从响应中取出：正文、推理、工具调用、总 token。
-fn extract_chat_result(chat_result: &Value) -> (String, String, Value, u64) {
+/// 从响应中取出：正文、推理、工具调用。
+fn extract_chat_result(chat_result: &Value) -> (String, String, Value) {
     let message = &chat_result["choices"][0]["message"];
     let content = message["content"].as_str().unwrap_or_default();
     let reasoning = message["reasoning_content"].as_str().unwrap_or_default();
-    let tool_calls = message
-        .get("tool_calls")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
-    let total_tokens = chat_result["usage"]["total_tokens"].as_u64().unwrap_or(0);
-    (
-        content.to_string(),
-        reasoning.to_string(),
-        tool_calls,
-        total_tokens,
-    )
+    let tool_calls = message.get("tool_calls").cloned().unwrap_or_else(|| json!([]));
+    (content.to_string(), reasoning.to_string(), tool_calls)
 }
 
 /// 并发执行一轮工具调用，返回按原始顺序排列的 tool 消息。
@@ -61,27 +53,27 @@ async fn run_tools(
         });
     }
 
-    let mut collected: Vec<(String, String)> = Vec::new();
+    let mut collected: HashMap<String, String> = HashMap::new();
     while let Some(res) = set.join_next().await {
         match res {
-            Ok(pair) => collected.push(pair),
-            Err(e) => eprintln!("工具执行失败: {e}"),
-        }
+            Ok((call_id, content)) => collected.insert(call_id, content),
+            Err(e) => {
+                eprintln!("工具执行失败: {e}");
+                None
+            }
+        };
     }
 
     order
         .into_iter()
         .filter_map(|call_id| {
-            collected
-                .iter()
-                .find(|(id, _)| *id == call_id)
-                .map(|(_, content)| {
-                    json!({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": content,
-                    })
+            collected.get(&call_id).map(|content| {
+                json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": content,
                 })
+            })
         })
         .collect()
 }
@@ -93,7 +85,7 @@ pub async fn main(
     mut rx: mpsc::Receiver<String>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut chat_request = ChatRequest::init(user_input)?;
+    let mut chat_request = ChatRequest::init(&chat_id, user_input)?;
 
     loop {
         channel
@@ -109,13 +101,13 @@ pub async fn main(
             Err(e) => {
                 let _ = channel
                     .send(OutboundMessage::text(chat_id.clone(), &e.to_string()).kind(MsgKind::Error))
-                    .await?;
+                    .await;
                 break;
             }
         };
 
-        let (content, reasoning, tool_calls, total_tokens) = extract_chat_result(&reply);
-        session::record_tokens(total_tokens)?;
+        let (content, reasoning, tool_calls) = extract_chat_result(&reply);
+        session::record_usage(&chat_id, &reply["usage"])?;
 
         if !content.is_empty() {
             channel
@@ -133,7 +125,7 @@ pub async fn main(
             messages.push(json!({ "role": "user", "content": new_msg }));
             println!("打断❓");
             chat_request.messages = messages.clone();
-            session::save(&messages)?;
+            session::save(&chat_id, &messages)?;
             continue;
         }
 
@@ -151,13 +143,13 @@ pub async fn main(
             messages.extend(tool_msgs);
 
             chat_request.messages = messages.clone();
-            session::save(&messages)?;
+            session::save(&chat_id, &messages)?;
         } else {
             messages.push(
                 json!({ "role": "assistant", "content": content, "reasoning_content": reasoning }),
             );
             chat_request.messages = messages.clone();
-            session::save(&messages)?;
+            session::save(&chat_id, &messages)?;
             break;
         }
     }

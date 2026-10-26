@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -14,8 +14,28 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use super::{MsgKind, Button, Callback, Channel, InboundMessage, MsgId, OutboundMessage};
+use super::{Button, Callback, Channel, InboundMessage, MsgId, MsgKind, OutboundMessage};
 
+/// 把会话键拆成 `(chat_id, 话题 ID)`。
+///
+/// 普通聊天直接用 `chat_id`；论坛话题（Threaded Mode）用 `chat_id:thread_id`。
+fn split_chat(key: &str) -> (&str, Option<i64>) {
+    match key.rsplit_once(':') {
+        Some((chat, thread)) => match thread.parse::<i64>() {
+            Ok(t) => (chat, Some(t)),
+            Err(_) => (key, None),
+        },
+        None => (key, None),
+    }
+}
+
+/// 由 `chat_id` 与话题 ID 组成会话键。
+fn join_chat(chat_id: i64, thread: Option<i64>) -> String {
+    match thread {
+        Some(t) => format!("{chat_id}:{t}"),
+        None => chat_id.to_string(),
+    }
+}
 
 /// Telegram 平台。
 pub struct TelegramChannel {
@@ -68,13 +88,16 @@ impl TelegramChannel {
 
     /// 上传本地文件并发送，返回消息 ID。
     ///
+    /// `key` 为会话键；话题模式下会把文件发到对应话题。
+    ///
     /// 按扩展名自动选择接口：图片走 `sendPhoto`、动图走 `sendAnimation`、
     /// 视频走 `sendVideo`、音频走 `sendAudio`，其余走 `sendDocument`。
     /// 发送前校验体积：图片上限 10MB，其余 50MB。
     ///
     /// 会缓存文件的 `file_id`（见 [`FILE_ID_PATH`]）：内容哈希未变时直接复用
     /// `file_id` 发送，免去重复上传；新上传的 `file_id` 在后台异步落盘。
-    pub async fn send_file(&self, chat_id: &str, path: &str) -> Result<MsgId> {
+    pub async fn send_file(&self, key: &str, path: &str) -> Result<MsgId> {
+        let (chat_id, thread) = split_chat(key);
         let (method, field) = media_method(path);
         let size = tokio::fs::metadata(path).await?.len();
         if size == 0 {
@@ -101,6 +124,9 @@ impl TelegramChannel {
             let mut body = serde_json::Map::new();
             body.insert("chat_id".into(), json!(chat_id));
             body.insert(field.into(), json!(file_id));
+            if let Some(t) = thread {
+                body.insert("message_thread_id".into(), json!(t));
+            }
             let value = self.api(method, &Value::Object(body)).await?;
             return Ok(msg_id(&value));
         }
@@ -109,12 +135,15 @@ impl TelegramChannel {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "file".to_string());
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .text("chat_id", chat_id.to_string())
             .part(
                 field,
                 reqwest::multipart::Part::bytes(data).file_name(file_name),
             );
+        if let Some(t) = thread {
+            form = form.text("message_thread_id", t.to_string());
+        }
         let url = format!("{}{}/{}", self.base_url, self.token, method);
         let value: Value = self
             .client
@@ -135,11 +164,12 @@ impl TelegramChannel {
         Ok(msg_id(&value))
     }
 
-    /// 延迟删除消息。
-    fn delete_after(&self, chat_id: &str, msg_id: &str, secs: u64) {
+    /// 延迟删除消息。`key` 为会话键，删除时只取 `chat_id`。
+    fn delete_after(&self, key: &str, msg_id: &str, secs: u64) {
         let client = self.client.clone();
         let url = format!("{}{}/deleteMessage", self.base_url, self.token);
-        let (chat_id, msg_id) = (chat_id.to_string(), msg_id.to_string());
+        let chat_id = split_chat(key).0.to_string();
+        let msg_id = msg_id.to_string();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(secs)).await;
             let _ = client
@@ -201,24 +231,28 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, msg: OutboundMessage) -> Result<MsgId> {
-        let mut body = json!({
-            "chat_id": msg.chat_id,
-            "text": msg.content,
-        });
         if msg.content.is_empty() {
             bail!("不能发送空消息");
+        }
+        let (chat_id, thread) = split_chat(&msg.chat_id);
+        let mut body = json!({
+            "chat_id": chat_id,
+            "text": msg.content,
+        });
+        if let Some(t) = thread {
+            body["message_thread_id"] = json!(t);
         }
         if msg.fold {
             body["text"] = json!(fold_markdown(&msg.content));
             body["parse_mode"] = json!("MarkdownV2");
-        } else if msg.kind != MsgKind::Error {
+        } else if msg.kind == MsgKind::Text {
             body["parse_mode"] = json!("Markdown");
         }
         if !msg.buttons.is_empty() {
             body["reply_markup"] = json!({ "inline_keyboard": buttons_json(&msg.buttons) });
         }
         if msg.kind == MsgKind::File {
-            return Ok(self.send_file(&msg.chat_id, &msg.content).await?)
+            return self.send_file(&msg.chat_id, &msg.content).await;
         }
         let resp = match self.api("SendMessage", &body).await {
             Ok(r) => r,
@@ -242,8 +276,24 @@ impl Channel for TelegramChannel {
         self.delete_after(chat_id, id, 0);
         Ok(())
     }
+
     fn get_allow_id(&self) -> String {
         self.allow_user_id.clone()
+    }
+
+    /// 创建论坛话题，返回 `chat_id:thread_id` 形式的新会话键。
+    async fn create_topic(&self, chat_id: &str, name: &str) -> Result<super::ChatId> {
+        let (chat, _) = split_chat(chat_id);
+        let resp = self
+            .api(
+                "createForumTopic",
+                &json!({ "chat_id": chat, "name": name }),
+            )
+            .await?;
+        let thread_id = resp["result"]["message_thread_id"]
+            .as_i64()
+            .ok_or_else(|| anyhow!("createForumTopic 未返回 message_thread_id"))?;
+        Ok(format!("{chat}:{thread_id}"))
     }
 }
 
@@ -337,29 +387,53 @@ fn parse_update(update: &Value) -> Option<InboundMessage> {
     if let Some(cq) = update.get("callback_query") {
         let user_id = cq["from"]["id"].as_i64()?;
         let chat_id = cq["message"]["chat"]["id"].as_i64()?;
+        let thread = cq["message"]["message_thread_id"].as_i64();
         return Some(InboundMessage {
             user_id: user_id.to_string(),
-            chat_id: chat_id.to_string(),
+            chat_id: join_chat(chat_id, thread),
             content: String::new(),
             callback: Some(Callback {
                 data: cq["data"].as_str().unwrap_or_default().to_string(),
                 msg_id: cq["message"]["message_id"].as_u64().unwrap_or(0).to_string(),
             }),
+            topic_name: None,
         });
     }
     // 普通消息
     let message = update.get("message")?;
+    let user_id = message["from"]["id"].as_i64()?;
+    let chat_id = message["chat"]["id"].as_i64()?;
+    let thread = message["message_thread_id"].as_i64();
+    let key = join_chat(chat_id, thread);
+
+    // 话题创建 / 改名服务消息：只有标题，没有正文
+    let created = message["forum_topic_created"]["name"]
+        .as_str()
+        .or_else(|| message["forum_topic_edited"]["name"].as_str());
+    if let Some(name) = created {
+        return Some(InboundMessage {
+            user_id: user_id.to_string(),
+            chat_id: key,
+            content: String::new(),
+            callback: None,
+            topic_name: Some(name.to_string()),
+        });
+    }
+
     let text = message["text"].as_str().unwrap_or_default();
     if text.is_empty() {
         return None;
     }
-    let user_id = message["from"]["id"].as_i64()?;
-    let chat_id = message["chat"]["id"].as_i64()?;
+    // 兜底：话题内消息有时会在 reply_to_message 里带上话题标题
+    let topic_name = message["reply_to_message"]["forum_topic_created"]["name"]
+        .as_str()
+        .map(str::to_string);
     Some(InboundMessage {
         user_id: user_id.to_string(),
-        chat_id: chat_id.to_string(),
+        chat_id: key,
         content: text.to_string(),
         callback: None,
+        topic_name,
     })
 }
 

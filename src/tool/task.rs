@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use tokio::process::Child;
 use tokio::sync::Mutex;
@@ -16,10 +17,9 @@ pub struct TaskHandle {
     pub output: Arc<Mutex<String>>,
 }
 
-lazy_static::lazy_static! {
-    /// 全部后台任务。
-    pub static ref TASKS: Mutex<HashMap<String, TaskHandle>> = Mutex::new(HashMap::new());
-}
+/// 全部后台任务。
+pub static TASKS: Lazy<Mutex<HashMap<String, TaskHandle>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub struct TaskTool;
 

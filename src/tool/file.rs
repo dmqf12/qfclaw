@@ -45,6 +45,7 @@ fn read_text(file: &str, offset: Option<usize>, limit: Option<usize>) -> String 
     };
 
     let mut out = String::new();
+    let mut chars = 0usize;
     let mut line_no = 0usize;
     let mut truncated = false;
 
@@ -62,10 +63,12 @@ fn read_text(file: &str, offset: Option<usize>, limit: Option<usize>) -> String 
             break;
         }
         let entry = format!("{line_no}| {line}\n");
-        if out.chars().count() + entry.chars().count() > MAX_READ_CHARS {
+        let entry_chars = entry.chars().count();
+        if chars + entry_chars > MAX_READ_CHARS {
             truncated = true;
             break;
         }
+        chars += entry_chars;
         out.push_str(&entry);
     }
 

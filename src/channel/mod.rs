@@ -5,23 +5,28 @@
 
 pub mod telegram;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 /// 平台消息 ID。各平台类型不同，统一为字符串。
 pub type MsgId = String;
 
-/// 会话 ID。各平台类型不同，统一为字符串。
+/// 会话 ID。
+///
+/// 形如 `chat_id` 或 `chat_id:thread_id`——后者对应 Telegram 论坛话题
+/// （Threaded Mode），业务层把它当作不透明的会话键，
+/// 由平台实现负责拼装与拆分。
 pub type ChatId = String;
 
 /// 消息用途，决定平台如何呈现。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MsgKind {
-    /// 文本。
+    /// 普通文本，按 Markdown 解析。
     Text,
-    /// 错误提示。
+    /// 纯文本，不做任何格式解析（用于指令回复等含特殊字符的内容）。
+    Plain,
+    /// 错误提示，同样不做格式解析。
     Error,
     /// 文件。
     File,
@@ -62,6 +67,9 @@ pub struct InboundMessage {
     pub content: String,
     /// 若为按钮回调则为 `Some`。
     pub callback: Option<Callback>,
+    /// 话题标题（Telegram 的 `forum_topic_created` / `forum_topic_edited`
+    /// 服务消息，或消息里 `reply_to_message` 携带的标题）。
+    pub topic_name: Option<String>,
 }
 
 /// 待发送的消息。
@@ -128,6 +136,13 @@ pub trait Channel: Send + Sync + 'static {
 
     /// 启动接收循环：持续拉取消息并推入 `tx`。
     async fn run(&self, tx: mpsc::Sender<InboundMessage>) -> Result<()>;
+
+    /// 在支持话题（Threaded Mode）的平台创建新话题，返回新会话键。
+    ///
+    /// 平台不支持时返回错误，调用方可退化为重置当前对话。
+    async fn create_topic(&self, _chat_id: &str, _name: &str) -> Result<ChatId> {
+        bail!("当前平台不支持创建话题")
+    }
 
     /// 发送消息，返回其 ID。
     async fn send(&self, msg: OutboundMessage) -> Result<MsgId>;

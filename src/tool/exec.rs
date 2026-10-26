@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 
 use super::task::{TASKS, TaskHandle};
-use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify};
+use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify, truncate};
 use crate::channel::{MsgKind, OutboundMessage};
 
 pub struct ExecTool;
@@ -53,30 +53,16 @@ impl Tool for ExecTool {
     }
 }
 
-/// 保留最新输出：超出上限时丢弃最旧的字符。
-fn keep_latest(text: &mut String) {
-    let total = text.chars().count();
-    if total > MAX_OUTPUT_CHARS {
-        let cut = text
-            .char_indices()
-            .nth(total - MAX_OUTPUT_CHARS)
-            .map(|(i, _)| i)
-            .unwrap_or(text.len());
-        text.replace_range(..cut, "");
-    }
-}
-
 async fn run(args: &Value, ctx: &ToolContext) -> String {
     let cmd_text = args["command"].as_str().unwrap_or("");
     let timeout_secs = args["timeout"].as_u64().unwrap_or(10);
     let task_id = format!("{:08x}", fastrand::u32(..));
     // 绝对路径：避免命令内 cd 切换目录后相对路径失效
-    let abs_task_dir = std::env::current_dir()
-        .unwrap()
-        .join("../qfclawtask")
-        .join(&task_id)
-        .to_string_lossy()
-        .to_string();
+    let task_dir = match std::env::current_dir() {
+        Ok(dir) => dir.join("../qfclawtask").join(&task_id),
+        Err(e) => return format!("❌ 无法定位工作目录: {e}"),
+    };
+    let abs_task_dir = task_dir.to_string_lossy().to_string();
 
     // 执行提示（命令结束后删除）
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
@@ -90,27 +76,25 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         .await
         .ok();
 
-    // 准备脚本：激活虚拟环境 + sudo 包装
-    let _ = Command::new("mkdir")
-        .args(["-p", &abs_task_dir])
-        .status()
-        .await;
-    let exec_content =
-        format!("source pyvenv/bin/activate\n{cmd_text}");
-    _ = fs::write(format!("{abs_task_dir}/exec.sh"), exec_content);
-    let _ = Command::new("chmod")
-        .args(["+x", &format!("{abs_task_dir}/exec.sh")])
-        .status()
-        .await;
+    // 准备脚本：激活虚拟环境后再执行命令
+    if let Err(e) = fs::create_dir_all(&abs_task_dir) {
+        return format!("❌ 创建任务目录失败: {e}");
+    }
+    let script = format!("source pyvenv/bin/activate\n{cmd_text}");
+    if let Err(e) = fs::write(format!("{abs_task_dir}/exec.sh"), script) {
+        return format!("❌ 写入执行脚本失败: {e}");
+    }
 
     // 启动命令
-    let mut child = Command::new("bash")
-        .arg("-c")
+    let mut child = match Command::new("bash")
         .arg(format!("{abs_task_dir}/exec.sh"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("Failed to spawn");
+    {
+        Ok(child) => child,
+        Err(e) => return format!("❌ 启动命令失败: {e}"),
+    };
 
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -127,7 +111,9 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
             }
             let mut lock = output_writer.lock().await;
             lock.push_str(&String::from_utf8_lossy(&buf[..n]));
-            keep_latest(&mut lock);
+            if lock.chars().count() > MAX_OUTPUT_CHARS {
+                *lock = truncate(&lock, MAX_OUTPUT_CHARS);
+            }
         }
     });
 
@@ -144,12 +130,12 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         Outcome::Done(wait) => {
             let log = output.lock().await.clone();
             let code = wait.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
-            let _ = Command::new("rm").args(["-rf", &abs_task_dir]).status().await;
+            let _ = fs::remove_dir_all(&abs_task_dir);
             format!("⚡任务完成 (Code {}):\n{}", code, log)
         }
         Outcome::Cancelled => {
             let _ = child.kill().await;
-            let _ = Command::new("rm").args(["-rf", &abs_task_dir]).status().await;
+            let _ = fs::remove_dir_all(&abs_task_dir);
             "🛑 任务已取消".to_string()
         }
         Outcome::Timeout => {

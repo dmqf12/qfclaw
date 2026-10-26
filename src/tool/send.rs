@@ -33,8 +33,8 @@ impl Tool for SendTool {
         let file = args["file"].as_str().unwrap_or("").to_string();
         notify(ctx, &format!("发送{}", file)).await;
         match ctx.channel.send(OutboundMessage::text(&ctx.chat_id, &file).kind(MsgKind::File)).await {
-            Ok(_) => String::from(format!("{}发送成功", file)),
-            Err(e) => String::from(format!("{}发送失败:{}", file, e)),
+            Ok(_) => format!("{file}发送成功"),
+            Err(e) => format!("{file}发送失败:{e}"),
         }
     }
 }

@@ -2,7 +2,6 @@
 //!
 //! 集中读取 `config/` 下的配置，业务代码不再各自解析 JSON。
 
-
 use anyhow::{anyhow, Result};
 
 /// 模型配置。
