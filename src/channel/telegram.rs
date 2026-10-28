@@ -16,6 +16,55 @@ use tokio::sync::mpsc;
 
 use super::{Button, Callback, Channel, InboundMessage, MsgId, MsgKind, OutboundMessage};
 
+/// Telegram 单条消息文本上限（UTF-16 码元）。
+const MAX_TEXT_UNITS: usize = 4000;
+/// 折叠模式会转义 MarkdownV2 特殊字符、行首加 `>`，内容膨胀，留更多余量。
+const MAX_FOLD_UNITS: usize = 3500;
+/// 模型用于显式切分超长回复的标记。
+const CUT_TAG: &str = "<cut/>";
+
+/// Telegram 按 UTF-16 码元计数（中文算 1，emoji 算 2）。
+fn text_units(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// 按 `<cut/>` 与单条上限切分消息。
+///
+/// 优先使用模型给出的分段点；单段仍超限时按行、再按字符硬切。
+fn split_message(text: &str, max: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    for part in text.split(CUT_TAG) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if text_units(part) <= max {
+            parts.push(part.to_string());
+            continue;
+        }
+        let mut buf = String::new();
+        for line in part.split_inclusive('\n') {
+            if !buf.is_empty() && text_units(&buf) + text_units(line) > max {
+                parts.push(std::mem::take(&mut buf));
+            }
+            if text_units(line) > max {
+                for ch in line.chars() {
+                    if text_units(&buf) + ch.len_utf16() > max {
+                        parts.push(std::mem::take(&mut buf));
+                    }
+                    buf.push(ch);
+                }
+            } else {
+                buf.push_str(line);
+            }
+        }
+        if !buf.is_empty() {
+            parts.push(buf);
+        }
+    }
+    parts
+}
+
 /// 把会话键拆成 `(chat_id, 话题 ID)`。
 ///
 /// 普通聊天直接用 `chat_id`；论坛话题（Threaded Mode）用 `chat_id:thread_id`。
@@ -164,6 +213,47 @@ impl TelegramChannel {
         Ok(msg_id(&value))
     }
 
+    /// 发送单条文本（调用方保证长度不超限）。
+    ///
+    /// Markdown 解析失败时自动降级为纯文本重发。
+    async fn send_text(
+        &self,
+        msg: &OutboundMessage,
+        text: &str,
+        with_buttons: bool,
+    ) -> Result<MsgId> {
+        let (chat_id, thread) = split_chat(&msg.chat_id);
+        let mut body = json!({ "chat_id": chat_id, "text": text });
+        if let Some(t) = thread {
+            body["message_thread_id"] = json!(t);
+        }
+        if msg.fold {
+            body["text"] = json!(fold_markdown(text));
+            body["parse_mode"] = json!("MarkdownV2");
+        } else if msg.kind == MsgKind::Text {
+            body["parse_mode"] = json!("Markdown");
+        }
+        if with_buttons && !msg.buttons.is_empty() {
+            body["reply_markup"] = json!({ "inline_keyboard": buttons_json(&msg.buttons) });
+        }
+        let resp = match self.api("SendMessage", &body).await {
+            Ok(r) => r,
+            Err(e) => {
+                if e.to_string().contains("parse") {
+                    body["parse_mode"] = json!("");
+                    self.api("SendMessage", &body).await?
+                } else {
+                    bail!(e)
+                }
+            }
+        };
+        let id = resp["result"]["message_id"].as_u64().unwrap_or(0).to_string();
+        if let Some(ttl) = msg.ttl {
+            self.delete_after(&msg.chat_id, &id, ttl);
+        }
+        Ok(id)
+    }
+
     /// 延迟删除消息。`key` 为会话键，删除时只取 `chat_id`。
     fn delete_after(&self, key: &str, msg_id: &str, secs: u64) {
         let client = self.client.clone();
@@ -234,42 +324,18 @@ impl Channel for TelegramChannel {
         if msg.content.is_empty() {
             bail!("不能发送空消息");
         }
-        let (chat_id, thread) = split_chat(&msg.chat_id);
-        let mut body = json!({
-            "chat_id": chat_id,
-            "text": msg.content,
-        });
-        if let Some(t) = thread {
-            body["message_thread_id"] = json!(t);
-        }
-        if msg.fold {
-            body["text"] = json!(fold_markdown(&msg.content));
-            body["parse_mode"] = json!("MarkdownV2");
-        } else if msg.kind == MsgKind::Text {
-            body["parse_mode"] = json!("Markdown");
-        }
-        if !msg.buttons.is_empty() {
-            body["reply_markup"] = json!({ "inline_keyboard": buttons_json(&msg.buttons) });
-        }
         if msg.kind == MsgKind::File {
             return self.send_file(&msg.chat_id, &msg.content).await;
         }
-        let resp = match self.api("SendMessage", &body).await {
-            Ok(r) => r,
-            Err(e) => {
-                if e.to_string().contains("parse") {
-                    body["parse_mode"] = json!("");
-                    self.api("SendMessage", &body).await?
-                } else {
-                    bail!(e)
-                }
-            }
-        };
-        let id = resp["result"]["message_id"].as_u64().unwrap_or(0).to_string();
-        if let Some(ttl) = msg.ttl {
-            self.delete_after(&msg.chat_id, &id, ttl);
+
+        // 超长回复按 `<cut/>` 分段后逐条发送，按钮只挂在最后一条
+        let max = if msg.fold { MAX_FOLD_UNITS } else { MAX_TEXT_UNITS };
+        let mut parts = split_message(&msg.content, max);
+        let last = parts.pop().ok_or_else(|| anyhow!("不能发送空消息"))?;
+        for part in &parts {
+            self.send_text(&msg, part, false).await?;
         }
-        Ok(id)
+        self.send_text(&msg, &last, true).await
     }
 
     async fn delete(&self, chat_id: &str, id: &str) -> Result<()> {
@@ -279,6 +345,18 @@ impl Channel for TelegramChannel {
 
     fn get_allow_id(&self) -> String {
         self.allow_user_id.clone()
+    }
+
+    /// 删除当前话题（连带话题内全部消息）。
+    async fn delete_topic(&self, chat_id: &str) -> Result<()> {
+        let (chat, thread) = split_chat(chat_id);
+        let thread = thread.ok_or_else(|| anyhow!("当前对话不是话题"))?;
+        self.api(
+            "deleteForumTopic",
+            &json!({ "chat_id": chat, "message_thread_id": thread }),
+        )
+        .await?;
+        Ok(())
     }
 
     /// 创建论坛话题，返回 `chat_id:thread_id` 形式的新会话键。
@@ -401,6 +479,11 @@ fn parse_update(update: &Value) -> Option<InboundMessage> {
     }
     // 普通消息
     let message = update.get("message")?;
+    // 忽略机器人发出的消息：自己创建话题等操作产生的服务消息会以 bot 身份下发，
+    // 当成用户消息处理会触发白名单校验。
+    if message["from"]["is_bot"].as_bool() == Some(true) {
+        return None;
+    }
     let user_id = message["from"]["id"].as_i64()?;
     let chat_id = message["chat"]["id"].as_i64()?;
     let thread = message["message_thread_id"].as_i64();

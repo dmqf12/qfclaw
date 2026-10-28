@@ -137,6 +137,13 @@ pub trait Channel: Send + Sync + 'static {
     /// 启动接收循环：持续拉取消息并推入 `tx`。
     async fn run(&self, tx: mpsc::Sender<InboundMessage>) -> Result<()>;
 
+    /// 删除对话对应的话题（含话题内全部消息）。
+    ///
+    /// 平台不支持话题、或当前会话不是话题时返回错误。
+    async fn delete_topic(&self, _chat_id: &str) -> Result<()> {
+        bail!("当前平台不支持话题")
+    }
+
     /// 在支持话题（Threaded Mode）的平台创建新话题，返回新会话键。
     ///
     /// 平台不支持时返回错误，调用方可退化为重置当前对话。

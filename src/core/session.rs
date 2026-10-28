@@ -106,6 +106,23 @@ pub fn reset(chat: &str) -> Result<()> {
     store(chat, &doc)
 }
 
+/// 删除当前对话：消息文件移到 `messages/clear/` 下保留。
+pub fn clear(chat: &str) -> Result<()> {
+    let file = path(chat);
+    if !std::path::Path::new(&file).exists() {
+        return Ok(());
+    }
+    let dir = format!("{MSG_DIR}/clear");
+    fs::create_dir_all(&dir)?;
+    let mut dest = format!("{dir}/{}.json", file_key(chat));
+    // 已有同名归档时加时间戳，避免覆盖
+    if std::path::Path::new(&dest).exists() {
+        dest = format!("{dir}/{}.{}.json", file_key(chat), now());
+    }
+    fs::rename(&file, dest)?;
+    Ok(())
+}
+
 /// 记录话题标题（来自 Telegram 的服务消息或建话题的返回值）。
 pub fn set_title(chat: &str, name: &str) -> Result<()> {
     let mut doc = load(chat);

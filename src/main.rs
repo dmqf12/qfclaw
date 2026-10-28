@@ -30,8 +30,11 @@ async fn handle_msg(
     while let Some(msg) = rx.recv().await {
         let chat_id = msg.chat_id.clone();
 
-        // 白名单校验
+        // 白名单校验（服务消息、回调不回复，避免刷屏）
         if msg.user_id != channel.get_allow_id() {
+            if msg.content.is_empty() {
+                continue;
+            }
             let _ = channel
                 .send(
                     OutboundMessage::text(
@@ -79,10 +82,12 @@ async fn handle_msg(
             continue;
         }
 
-        // 非话题会话的 /new 会重置当前对话，先停掉本会话任务，
-        // 避免其把旧历史写回覆盖；话题模式下 /new 是新建 Topic，不影响任何任务。
-        if (msg.content == "/new" || msg.content.starts_with("/new "))
-            && !chat_id.contains(':')
+        // 会重置/删除当前对话的指令，先停掉本会话任务，避免旧历史被写回覆盖。
+        // 话题模式下的 /new 是新建 Topic，不影响任何任务。
+        let reset_current = msg.content == "/clear"
+            || ((msg.content == "/new" || msg.content.starts_with("/new "))
+                && !chat_id.contains(':'));
+        if reset_current
             && let Some((handle, _, token)) = tasks.remove(&chat_id)
         {
             token.cancel();
@@ -90,7 +95,7 @@ async fn handle_msg(
         }
 
         // 斜杠指令
-        if ["/new", "/restart", "/status", "/reasoning"]
+        if ["/new", "/clear", "/restart", "/status", "/reasoning"]
             .iter()
             .any(|cmd| msg.content.starts_with(cmd))
         {

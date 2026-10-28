@@ -41,6 +41,16 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
         return Ok(());
     }
 
+    // 删除当前对话：消息文件移到 messages/clear/，话题一并删除
+    if cmd_text == "/clear" {
+        session::clear(chat_id)?;
+        // 话题删除后无法再发消息，只有删除失败时才回执
+        if channel.delete_topic(chat_id).await.is_err() {
+            reply(&channel, chat_id, "🧹 当前对话已清除").await?;
+        }
+        return Ok(());
+    }
+
     if cmd_text == "/restart" {
         let _ = channel
             .send(OutboundMessage::text(chat_id.to_string(), "🔄重启中").ttl(3))
