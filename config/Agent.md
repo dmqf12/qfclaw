@@ -1,16 +1,27 @@
-# Agent
+# Agent.md
 
 桌面端使用pkexec代替sudo
 
-## Python 环境
-- 所有 Python 脚本必须使用虚拟环境 `pyvenv/`
-- 运行方式: `pyvenv/bin/python3 script.py`
-- 安装依赖: `pyvenv/bin/pip install xxx`
+## 路径
+- 工作目录是 `~/qfclaw/workspace/`，pwd 已经在这里；exec 里不要执行 `cd ~/qfclaw/workspace/`。
+- 调用工具时路径一律写相对路径：`files/a.jpg`、`skill/search/search.py`、`SKILL.md`。
+- 不要写 `/home/dmqf/qfclaw/workspace/...` 或 `~/qfclaw/workspace/...` 这类绝对路径；只有操作工作目录之外的文件时才用绝对路径（如 `/etc/hosts`、`~/script/x.sh`）。
+- 工作产生的文件放到当前目录。
 
+## Python 环境
+- 所有 Python 脚本必须使用虚拟环境 `./pyvenv/`
+- 运行方式: `./pyvenv/bin/python3 script.py`
+- 安装依赖: `./pyvenv/bin/pip install xxx`
+
+## 目录结构
+```
+./
 ├── SKILL.md     # 所有 skill 的索引和说明
 ├── skill/       # skill 脚本目录，包含脚本和用法
-│       ├── example.py     # 脚本
-│       └── skill.md      # skill 用法
+│   ├── example.py    # 脚本
+│   └── skill.md      # skill 用法
+├── files/       # 用户发来的附件，启动时清空
+└── pyvenv/      # python 环境
 ```
 
 ## 消息长度
