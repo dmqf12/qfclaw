@@ -146,8 +146,8 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
     }
 
     // 上下文窗口阈值：不带参数弹按钮，带参数直接设置
-    if let Some(arg) = cmd_text.strip_prefix("/context") {
-        let arg = arg.trim();
+    if cmd_text == "/context" || cmd_text.starts_with("/context ") {
+        let arg = cmd_text.strip_prefix("/context").unwrap_or_default().trim();
         if arg.is_empty() {
             let current = ModelConfig::load().map(|c| c.context_window).unwrap_or(0);
             let keyboard = vec![
@@ -174,12 +174,7 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
         match arg.parse::<u64>() {
             Ok(value) if value > 0 => {
                 save_context_window(value)?;
-                reply(
-                    &channel,
-                    chat_id,
-                    &format!("✅ 上下文窗口已设为 {}", human_tokens(value)),
-                )
-                .await?;
+                reply(&channel, chat_id, &context_window_reply(value)).await?;
             }
             _ => {
                 reply(
@@ -221,11 +216,7 @@ pub async fn deal_callback(channel: Arc<dyn Channel>, chat_id: &str, cb: &Callba
             let _ = channel.delete(chat_id, &cb.msg_id).await;
             let _ = channel
                 .send(
-                    OutboundMessage::text(
-                        chat_id.to_string(),
-                        &format!("✅ 上下文窗口已设为 {}", human_tokens(value)),
-                    )
-                    .ttl(3),
+                    OutboundMessage::text(chat_id.to_string(), &context_window_reply(value)).ttl(3),
                 )
                 .await;
         }
@@ -245,6 +236,11 @@ pub async fn deal_callback(channel: Arc<dyn Channel>, chat_id: &str, cb: &Callba
         done(&channel, chat_id, &cb.msg_id).await;
     }
     Ok(())
+}
+
+/// 上下文窗口设置成功的回执。
+fn context_window_reply(tokens: u64) -> String {
+    format!("✅ 上下文窗口已设为 {}", human_tokens(tokens))
 }
 
 /// token 数的易读写法：1500 → `1.5K`，300000 → `300K`，1000000 → `1M`。

@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 
 use super::task::{TASKS, TaskHandle};
-use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify, truncate};
+use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, truncate};
 use crate::channel::{MsgKind, OutboundMessage};
 
 pub struct ExecTool;
@@ -237,7 +237,6 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
                 Outcome::Timeout => format!("⏳任务超时转入后台，ID: {task_id}"),
                 _ => format!("⏸ 用户中止，任务已转入后台，ID: {task_id}"),
             };
-            notify(ctx, &msg).await;
             format!("{}\n当前输出:\n{}", msg, log)
         }
     }

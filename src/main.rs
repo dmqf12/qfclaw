@@ -254,9 +254,6 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all("workspace/")?;
     // 后续的相对路径（config / messages / workspace）都基于 workspace 目录
     std::env::set_current_dir("workspace/")?;
-    // 图片临时目录：每次启动清空，避免残留
-    let _ = std::fs::remove_dir_all("../tmp");
-    std::fs::create_dir_all("../tmp")?;
 
     log::info(
         "main",

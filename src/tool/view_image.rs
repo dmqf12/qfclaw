@@ -4,7 +4,7 @@
 //! 上传成功的文件保留在服务端（按内容哈希缓存复用），
 //! 只有上传失败（例如存储已满）时才清理最旧的文件后重试。
 //!
-//! URL 图片会先下载到 `../tmp/`（运行目录下的 tmp，启动时清空）。
+//! URL 图片直接读进内存，不落盘。
 
 use std::path::Path;
 use std::time::Duration;
@@ -22,8 +22,6 @@ use crate::log;
 
 /// 单张图片体积上限。
 const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
-/// URL 图片的下载目录（相对 workspace）。
-const TMP_DIR: &str = "../tmp";
 /// file_id 缓存文件。
 const CACHE_FILE: &str = "../config/deepseek/file_id.json";
 /// 存储不足时的重试次数。
@@ -146,7 +144,7 @@ fn sha256_hex(data: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// 下载网络图片到 `../tmp/`，返回内容与文件名。
+/// 下载网络图片，返回内容与文件名。
 async fn download(url: &str) -> Result<(Vec<u8>, String), String> {
     let resp = Client::new()
         .get(url)
@@ -178,16 +176,16 @@ async fn download(url: &str) -> Result<(Vec<u8>, String), String> {
                 .next()
                 .unwrap_or_default();
             if is_image_name(name) {
-                return save_download(resp, name).await;
+                return read_body(resp, name).await;
             }
             return Err("❌ 无法识别图片类型".to_string());
         }
     };
-    save_download(resp, &format!("image.{ext}")).await
+    read_body(resp, &format!("image.{ext}")).await
 }
 
-/// 把响应体写入 tmp 目录。
-async fn save_download(resp: reqwest::Response, name: &str) -> Result<(Vec<u8>, String), String> {
+/// 读取响应体并校验体积，返回内容与文件名。
+async fn read_body(resp: reqwest::Response, name: &str) -> Result<(Vec<u8>, String), String> {
     let data = resp
         .bytes()
         .await
@@ -199,13 +197,6 @@ async fn save_download(resp: reqwest::Response, name: &str) -> Result<(Vec<u8>, 
             data.len() as f64 / 1024.0 / 1024.0
         ));
     }
-    tokio::fs::create_dir_all(TMP_DIR)
-        .await
-        .map_err(|e| format!("❌ 创建临时目录失败: {e}"))?;
-    let safe = format!("{}/{}", TMP_DIR, name.replace(['/', '\\'], "_"));
-    tokio::fs::write(&safe, &data)
-        .await
-        .map_err(|e| format!("❌ 保存图片失败: {e}"))?;
     Ok((data, name.to_string()))
 }
 

@@ -42,7 +42,7 @@ const NOTIFY_MERGED_CHARS: usize = 3_000;
 pub struct ToolContext {
     pub channel: Arc<dyn Channel>,
     pub chat_id: String,
-    /// 中止当前工具调用用的令牌（可整体替换，见 [`ToolContext::stop_current`]）。
+    /// 中止当前工具调用用的令牌（`/stop` 时会整体换成新令牌）。
     cancel: Arc<Mutex<CancellationToken>>,
     /// 子代理上下文：不向用户发送任何提示。
     pub silent: bool,

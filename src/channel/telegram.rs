@@ -282,10 +282,7 @@ impl TelegramChannel {
                 }
             }
         };
-        let id = resp["result"]["message_id"]
-            .as_u64()
-            .unwrap_or(0)
-            .to_string();
+        let id = msg_id(&resp);
         if let Some(ttl) = msg.ttl {
             self.delete_after(&msg.chat_id, &id, ttl);
         }
