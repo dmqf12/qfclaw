@@ -27,7 +27,7 @@ use crate::log;
 pub const MAX_OUTPUT_CHARS: usize = 8_000;
 
 /// 折叠提示消息的显示时长（秒）。
-pub const NOTIFY_TTL_SECS: u64 = 15;
+pub const NOTIFY_TTL_SECS: u64 = 10;
 
 /// 短时效工具（看图、发文件）结果的显示时长（秒），比默认更短。
 const SHORT_TTL_SECS: u64 = 3;
