@@ -46,9 +46,10 @@ pub struct ToolContext {
     images: Arc<Mutex<Vec<String>>>,
     /// 正在执行的工具数量（用于判断 /stop 是否有东西可停）。
     active: Arc<AtomicUsize>,
-    /// 本次工具提示消息的 ID：工具结束时这条消息会被结果原地替换。
+    /// 本次工具的提示消息：`(消息 ID, 原文)`。
+    /// 工具结束时把结果追加到这条消息里（调用内容和结果都能看到）。
     /// 每个工具走各自的 [`ToolContext::child`]，并发调用互不干扰。
-    notice: Arc<Mutex<Option<MsgId>>>,
+    notice: Arc<Mutex<Option<(MsgId, String)>>>,
 }
 
 impl ToolContext {
@@ -113,13 +114,13 @@ impl ToolContext {
         self.active.fetch_sub(1, Ordering::SeqCst);
     }
 
-    /// 记住本次工具的提示消息，结束时会被结果原地替换。
-    async fn remember_notice(&self, id: MsgId) {
-        *self.notice.lock().await = Some(id);
+    /// 记住本次工具的提示消息，结束时会把结果追加进去。
+    async fn remember_notice(&self, id: MsgId, text: &str) {
+        *self.notice.lock().await = Some((id, text.to_string()));
     }
 
-    /// 本次工具提示消息的 ID（还没有则为 `None`）。
-    async fn last_notice(&self) -> Option<MsgId> {
+    /// 本次工具的提示消息 `(ID, 原文)`（还没有则为 `None`）。
+    async fn last_notice(&self) -> Option<(MsgId, String)> {
         self.notice.lock().await.clone()
     }
 
@@ -240,7 +241,7 @@ pub async fn notify(ctx: &ToolContext, msg: &str) {
         )
         .await
     {
-        ctx.remember_notice(id).await;
+        ctx.remember_notice(id, msg).await;
     }
 }
 
@@ -259,9 +260,10 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
 
     let text = format!("{header}:\n{brief}");
 
-    // 首选：用结果原地替换本次工具的提示消息
-    if let Some(id) = ctx.last_notice().await {
-        let message = OutboundMessage::text(ctx.chat_id.clone(), &text)
+    // 首选：把结果追加到本次工具的提示消息里（调用内容与结果同一条消息）
+    if let Some((id, original)) = ctx.last_notice().await {
+        let merged = format!("{original}\n\n{text}");
+        let message = OutboundMessage::text(ctx.chat_id.clone(), &merged)
             .kind(MsgKind::Text)
             .fold();
         if ctx.channel.edit(&message, &id).await.is_ok() {

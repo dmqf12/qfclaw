@@ -148,7 +148,7 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
             )
             .await
     {
-        ctx.remember_notice(id).await;
+        ctx.remember_notice(id, &start_msg).await;
     }
 
     // 准备脚本：激活虚拟环境后再执行命令

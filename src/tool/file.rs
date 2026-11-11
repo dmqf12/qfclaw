@@ -47,6 +47,16 @@ fn context_around(content: &str, line: usize, span: usize) -> String {
         .join("\n")
 }
 
+/// 消息里展示的参数摘要：过长时截断并注明总长度。
+fn preview(text: &str, max: usize) -> String {
+    let total = text.chars().count();
+    if total <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max).collect();
+    format!("{head}…（共 {total} 字符）")
+}
+
 /// 读取文本文件，返回带行号的内容。
 ///
 /// `offset` 为起始行（1 起），`limit` 为最多读取行数；并按字符上限截断。
@@ -155,7 +165,11 @@ impl Tool for FileTool {
                         Ok(false) => {}
                     }
                 }
-                notify(ctx, &format!("✏️写入：{file}")).await;
+                let brief = match content.is_empty() {
+                    true => "(空内容)".to_string(),
+                    false => preview(content, 300),
+                };
+                notify(ctx, &format!("✏️写入：{file}\n{brief}")).await;
                 match fs::write(file, content) {
                     Ok(_) => format!("写入成功: {file}"),
                     Err(e) => format!("写入失败 {file}: {e}"),
@@ -224,7 +238,15 @@ impl Tool for EditTool {
             Ok(false) => {}
         }
 
-        notify(ctx, &format!("📝编辑：{file}")).await;
+        notify(
+            ctx,
+            &format!(
+                "📝编辑：{file}\n{} → {}",
+                preview(old, 150),
+                preview(new, 150)
+            ),
+        )
+        .await;
 
         let content = match fs::read_to_string(file) {
             Ok(c) => c,
