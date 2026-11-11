@@ -12,9 +12,12 @@ use regex::Regex;
 use reqwest::Client;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-use super::{Button, Callback, Channel, InboundMessage, MsgId, MsgKind, OutboundMessage};
+use super::{
+    Button, Callback, Channel, InboundFile, InboundMessage, MsgId, MsgKind, OutboundMessage,
+};
 use crate::log;
 
 /// Telegram 单条消息文本上限（UTF-16 码元）。
@@ -68,6 +71,19 @@ fn split_message(text: &str, max: usize) -> Vec<String> {
 
 /// Telegram API 请求超时（上传大文件需要时间）。
 const API_TIMEOUT_SECS: u64 = 180;
+
+/// 附件保存目录（相对工作目录 workspace）。
+const FILES_DIR: &str = "files";
+
+/// 附件下载上限：Bot API 的 getFile 只能取 20MB 以内的文件。
+const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
+
+/// 解析阶段拿到的附件信息，下载在接收循环里完成。
+struct PendingFile {
+    file_id: String,
+    name: String,
+    kind: &'static str,
+}
 
 /// Bot 菜单里的指令（硬编码，避免与配置文件不同步）。
 ///
@@ -165,6 +181,47 @@ impl TelegramChannel {
                 &json!({ "callback_query_id": callback_id }),
             )
             .await;
+    }
+
+    /// 文件下载 URL 前缀：把 `.../bot` 换成 `.../file/bot`。
+    fn file_base(&self) -> String {
+        self.base_url.replace("/bot", "/file/bot")
+    }
+
+    /// 下载一个附件到 `files/`，返回相对工作目录的路径。
+    ///
+    /// 超过 20MB 的文件 Bot API 不给下载，直接报错让用户知道。
+    async fn download(&self, file: &PendingFile, stem: &str) -> Result<InboundFile> {
+        let resp = self
+            .api("getFile", &json!({ "file_id": file.file_id }))
+            .await?;
+        let remote = resp["result"]["file_path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("getFile 未返回 file_path"))?;
+
+        let url = format!("{}{}/{}", self.file_base(), self.token, remote);
+        let mut resp = self.client.get(url).send().await?;
+        if !resp.status().is_success() {
+            bail!("下载失败：HTTP {}", resp.status());
+        }
+
+        tokio::fs::create_dir_all(FILES_DIR).await?;
+        let dest = format!("{FILES_DIR}/{stem}-{}", sanitize_name(&file.name));
+        let mut out = tokio::fs::File::create(&dest).await?;
+        let mut written: u64 = 0;
+        // 分块写盘：避免大文件整个读进内存
+        while let Some(chunk) = resp.chunk().await? {
+            written += chunk.len() as u64;
+            if written > MAX_DOWNLOAD_BYTES {
+                let _ = tokio::fs::remove_file(&dest).await;
+                bail!("文件超过 20MB，Telegram 不允许机器人下载");
+            }
+            out.write_all(&chunk).await?;
+        }
+        Ok(InboundFile {
+            path: dest,
+            kind: file.kind.to_string(),
+        })
     }
 
     /// 上传本地文件并发送，返回消息 ID。
@@ -345,7 +402,33 @@ impl Channel for TelegramChannel {
                                 {
                                     self.answer_callback(cid).await
                                 }
-                                if let Some(msg) = parse_update(update) {
+                                if let Some((mut msg, pending)) = parse_update(update) {
+                                    let prefix = update["update_id"].as_i64().unwrap_or(0);
+                                    for (index, file) in pending.iter().enumerate() {
+                                        let stem = format!("{prefix}-{}", index + 1);
+                                        match self.download(file, &stem).await {
+                                            Ok(inbound) => {
+                                                log::info(
+                                                    "tg",
+                                                    format!(
+                                                        "下载附件 {} -> {}",
+                                                        file.name, inbound.path
+                                                    ),
+                                                );
+                                                msg.files.push(inbound);
+                                            }
+                                            Err(e) => {
+                                                log::warn(
+                                                    "tg",
+                                                    format!("附件 {} 下载失败：{e}", file.name),
+                                                );
+                                                msg.content.push_str(&format!(
+                                                    "\n[{}下载失败：{e}]",
+                                                    file.kind
+                                                ));
+                                            }
+                                        }
+                                    }
                                     let _ = tx.send(msg).await;
                                 }
                             }
@@ -568,25 +651,29 @@ fn media_method(path: &str) -> (&'static str, &'static str) {
 }
 
 /// 把 Telegram update 转换成统一消息；无法识别时返回 `None`。
-fn parse_update(update: &Value) -> Option<InboundMessage> {
+fn parse_update(update: &Value) -> Option<(InboundMessage, Vec<PendingFile>)> {
     // 按钮回调
     if let Some(cq) = update.get("callback_query") {
         let user_id = cq["from"]["id"].as_i64()?;
         let chat_id = cq["message"]["chat"]["id"].as_i64()?;
         let thread = cq["message"]["message_thread_id"].as_i64();
-        return Some(InboundMessage {
-            user_id: user_id.to_string(),
-            chat_id: join_chat(chat_id, thread),
-            content: String::new(),
-            callback: Some(Callback {
-                data: cq["data"].as_str().unwrap_or_default().to_string(),
-                msg_id: cq["message"]["message_id"]
-                    .as_u64()
-                    .unwrap_or(0)
-                    .to_string(),
-            }),
-            topic_name: None,
-        });
+        return Some((
+            InboundMessage {
+                user_id: user_id.to_string(),
+                chat_id: join_chat(chat_id, thread),
+                content: String::new(),
+                callback: Some(Callback {
+                    data: cq["data"].as_str().unwrap_or_default().to_string(),
+                    msg_id: cq["message"]["message_id"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        .to_string(),
+                }),
+                topic_name: None,
+                files: Vec::new(),
+            },
+            Vec::new(),
+        ));
     }
     // 普通消息
     let message = update.get("message")?;
@@ -605,30 +692,94 @@ fn parse_update(update: &Value) -> Option<InboundMessage> {
         .as_str()
         .or_else(|| message["forum_topic_edited"]["name"].as_str());
     if let Some(name) = created {
-        return Some(InboundMessage {
-            user_id: user_id.to_string(),
-            chat_id: key,
-            content: String::new(),
-            callback: None,
-            topic_name: Some(name.to_string()),
-        });
+        return Some((
+            InboundMessage {
+                user_id: user_id.to_string(),
+                chat_id: key,
+                content: String::new(),
+                callback: None,
+                topic_name: Some(name.to_string()),
+                files: Vec::new(),
+            },
+            Vec::new(),
+        ));
     }
 
-    let text = message["text"].as_str().unwrap_or_default();
-    if text.is_empty() {
+    // 附件：正文可能是 caption
+    let text = message["text"]
+        .as_str()
+        .or_else(|| message["caption"].as_str())
+        .unwrap_or_default();
+    let files = media_files(message);
+    if text.is_empty() && files.is_empty() {
         return None;
     }
     // 兜底：话题内消息有时会在 reply_to_message 里带上话题标题
     let topic_name = message["reply_to_message"]["forum_topic_created"]["name"]
         .as_str()
         .map(str::to_string);
-    Some(InboundMessage {
-        user_id: user_id.to_string(),
-        chat_id: key,
-        content: text.to_string(),
-        callback: None,
-        topic_name,
-    })
+    Some((
+        InboundMessage {
+            user_id: user_id.to_string(),
+            chat_id: key,
+            content: text.to_string(),
+            callback: None,
+            topic_name,
+            files: Vec::new(),
+        },
+        files,
+    ))
+}
+
+/// 从消息里提取可下载的附件（图片取最大尺寸那张）。
+fn media_files(message: &Value) -> Vec<PendingFile> {
+    if let Some(best) = message["photo"].as_array().and_then(|list| list.last())
+        && let Some(file_id) = best["file_id"].as_str()
+    {
+        return vec![PendingFile {
+            file_id: file_id.to_string(),
+            name: "photo.jpg".to_string(),
+            kind: "图片",
+        }];
+    }
+    let kinds = [
+        ("document", "file", "文件"),
+        ("animation", "animation.gif", "动图"),
+        ("video", "video.mp4", "视频"),
+        ("audio", "audio.mp3", "音频"),
+        ("voice", "voice.ogg", "语音"),
+    ];
+    for (field, default_name, kind) in kinds {
+        let Some(node) = message.get(field).filter(|node| node.is_object()) else {
+            continue;
+        };
+        let Some(file_id) = node["file_id"].as_str() else {
+            continue;
+        };
+        let name = node["file_name"].as_str().unwrap_or(default_name);
+        return vec![PendingFile {
+            file_id: file_id.to_string(),
+            name: name.to_string(),
+            kind,
+        }];
+    }
+    Vec::new()
+}
+
+/// 文件名消毒：去掉路径分隔符与控制字符，限制长度。
+fn sanitize_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let cleaned = cleaned.replace("..", "_");
+    let trimmed = cleaned.trim_matches('.').trim();
+    let name = if trimmed.is_empty() { "file" } else { trimmed };
+    name.chars().take(100).collect()
 }
 
 /// 转义 MarkdownV2 特殊字符。
@@ -670,4 +821,50 @@ fn buttons_json(buttons: &[Vec<Button>]) -> Value {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_name_strips_paths_and_limits() {
+        let name = sanitize_name("../../etc/passwd");
+        assert!(!name.contains(".."), "不应保留 .. ：{name}");
+        assert!(!name.contains('/'), "不应保留路径分隔符：{name}");
+        assert_eq!(sanitize_name("a/b\\c.txt"), "a_b_c.txt");
+        assert_eq!(sanitize_name("   "), "file");
+        assert_eq!(sanitize_name(&"x".repeat(200)).chars().count(), 100);
+    }
+
+    #[test]
+    fn media_files_picks_largest_photo() {
+        let message = json!({
+            "photo": [
+                { "file_id": "small", "file_size": 100 },
+                { "file_id": "big", "file_size": 900 }
+            ]
+        });
+        let files = media_files(&message);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_id, "big");
+        assert_eq!(files[0].kind, "图片");
+    }
+
+    #[test]
+    fn media_files_reads_document_name() {
+        let message = json!({
+            "document": { "file_id": "doc1", "file_name": "报告.pdf" }
+        });
+        let files = media_files(&message);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "报告.pdf");
+        assert_eq!(files[0].kind, "文件");
+    }
+
+    #[test]
+    fn media_files_ignores_plain_text() {
+        assert!(media_files(&json!({ "text": "你好" })).is_empty());
+    }
 }

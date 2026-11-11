@@ -58,6 +58,15 @@ pub struct Callback {
     pub msg_id: MsgId,
 }
 
+/// 用户发来的附件（已下载到本地）。
+#[derive(Debug, Clone)]
+pub struct InboundFile {
+    /// 相对工作目录的路径，如 `files/123-1-report.pdf`。
+    pub path: String,
+    /// 类型标签，如「图片」「文件」「语音」。
+    pub kind: String,
+}
+
 /// 收到的消息。
 #[derive(Debug, Clone)]
 pub struct InboundMessage {
@@ -70,6 +79,8 @@ pub struct InboundMessage {
     /// 话题标题（Telegram 的 `forum_topic_created` / `forum_topic_edited`
     /// 服务消息，或消息里 `reply_to_message` 携带的标题）。
     pub topic_name: Option<String>,
+    /// 用户随消息发来的附件（已下载到本地）。
+    pub files: Vec<InboundFile>,
 }
 
 /// 待发送的消息。

@@ -141,7 +141,8 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
             continue;
         }
 
-        if msg.content.is_empty() {
+        // 只有纯附件、没有文字的消息也要处理
+        if msg.content.is_empty() && msg.files.is_empty() {
             continue;
         }
 
@@ -219,7 +220,16 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
             tasks.remove(&chat_id);
         }
 
-        let content = msg.content;
+        // 附件以 `[类型]路径` 附在用户消息后面，由模型自行决定怎么处理
+        let mut content = msg.content;
+        for file in &msg.files {
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(&format!("[{}]{}", file.kind, file.path));
+            log::info("tg", format!("{chat} 附件 [{}]{}", file.kind, file.path));
+        }
+
         if let Some(task) = tasks.get(&chat_id) {
             log::info(
                 "agent",
@@ -254,6 +264,9 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all("workspace/")?;
     // 后续的相对路径（config / messages / workspace）都基于 workspace 目录
     std::env::set_current_dir("workspace/")?;
+    // 附件目录：每次启动清空，避免长期堆积
+    let _ = std::fs::remove_dir_all("files");
+    std::fs::create_dir_all("files")?;
 
     log::info(
         "main",

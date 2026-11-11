@@ -31,6 +31,7 @@
 │   └── telegram/
 │       └── file_id.json   # 发送文件的 file_id 缓存（自动生成）
 ├── messages/              # 会话文件，一个对话一个文件
+├── files/                 # 用户发来的附件（启动时清空）
 ├── workspace/             # 进程工作目录，工具的根目录
 │   └── SKILL.md           # 技能索引
 └── qfclawtask/            # exec 的临时执行目录（启动时清空）
