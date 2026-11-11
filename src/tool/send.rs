@@ -1,6 +1,6 @@
-use async_trait::async_trait;
-use serde_json::{json, Value};
 use crate::channel::*;
+use async_trait::async_trait;
+use serde_json::{Value, json};
 
 use super::{Tool, ToolContext, notify};
 
@@ -30,9 +30,16 @@ impl Tool for SendTool {
     }
 
     async fn call(&self, args: Value, ctx: &ToolContext) -> String {
+        if ctx.silent {
+            return "❌ 子代理不能直接向用户发送文件".to_string();
+        }
         let file = args["file"].as_str().unwrap_or("").to_string();
         notify(ctx, &format!("发送{}", file)).await;
-        match ctx.channel.send(OutboundMessage::text(&ctx.chat_id, &file).kind(MsgKind::File)).await {
+        match ctx
+            .channel
+            .send(OutboundMessage::text(&ctx.chat_id, &file).kind(MsgKind::File))
+            .await
+        {
             Ok(_) => format!("{file}发送成功"),
             Err(e) => format!("{file}发送失败:{e}"),
         }

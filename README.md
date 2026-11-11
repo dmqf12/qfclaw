@@ -44,12 +44,9 @@
 {
   "telegram": {
     "token": "1234567890:ABCdefGHIJKlmNop...",
-    "allow_user_id": 123456789,
+    "allow_user_id": [123456789],
     "base_url": "https://api.telegram.org/bot",
-    "bot_id": 0,
-    "commands": [
-      { "command": "new", "description": "✅开启新对话" }
-    ]
+    "bot_id": 0
   }
 }
 ```
@@ -57,10 +54,11 @@
 | 字段 | 说明 |
 | --- | --- |
 | `token` | **必填**，@BotFather 获取 |
-| `allow_user_id` | **必填**，允许使用机器人的 Telegram 用户 ID（白名单，其他人会被拒绝并回显其 ID） |
+| `allow_user_id` | **必填**，允许使用机器人的 Telegram 用户 ID 列表，如 `[123456789, 987654321]`（白名单，其他人会被拒绝并回显其 ID；也兼容旧的单个数字写法） |
 | `base_url` | Bot API 地址，默认官方地址；自建网关可改 |
-| `commands` | 启动时通过 `setMyCommands` 注册的指令列表 |
 | `bot_id` | 预留，当前未使用 |
+
+Bot 菜单里的指令不通过配置文件下发，硬编码在 `src/channel/telegram.rs` 的 `COMMANDS` 常量里（顺序即客户端显示顺序）。
 
 ### config/models.json
 
@@ -87,6 +85,7 @@
 | `<模型名>.token` | API Key |
 | `config.reasoning` | 推理模式：`enabled` / `adaptive` / `disabled`，由 `/reasoning` 按钮修改 |
 | `config.show_reasoning` | 由 `/reasoning` 按钮写入，当前版本未使用 |
+| `config.context_window` | 上下文压缩阈值（token），默认 `800000`。上次请求的 `usage.total_tokens` 超过它就自动压缩；可用 `/context` 修改 |
 | `config.stream` | 预留，当前未使用 |
 
 ### 人设文件
@@ -109,9 +108,11 @@ cargo build --release
 | --- | --- |
 | `/new [标题]` | 新建对话。话题模式下创建新 Topic；不支持话题时清空当前对话 |
 | `/clear` | 删除当前对话：消息文件移到 `messages/clear/`，话题模式下一并删除该话题 |
+| `/compact` | 压缩上下文：把历史总结进 `memory`，消息列表只保留最后一条用户消息 |
 | `/status` | 显示话题标题与上下文用量 |
 | `/reasoning` | 选择推理模式（隐藏 / 折叠 / 关闭 / 适应） |
-| `/stop` | 停止当前对话正在运行的任务 |
+| `/context [token数]` | 查看或设置上下文压缩阈值（默认弹按钮：100K / 300K / 500K / 1M），也可 `/context 500000` 直接指定 |
+| `/stop` | 中止当前工具调用：`exec` 转入后台继续运行（不杀进程），结果交还模型继续；可用 `operate_task` 查看或终止 |
 | `/restart` | 重启服务（`systemctl --user restart qfclaw`） |
 
 ## 会话机制
@@ -151,8 +152,74 @@ cargo build --release
 | `operate_file` | 读取（支持 offset/limit）、写入、删除文本文件 |
 | `edit_file` | 精确替换文件中的一段文本，`old_string` 必须唯一 |
 | `send_file` | 发送图片（≤10MB）/ 其他文件（≤50MB） |
+| `subagent` | 把自包含的子任务交给子代理独立完成，返回结论 |
+| `view_image` | 查看本地或网络图片，图片内容进入上下文 |
 
 工具的输出会被截断到最新 8000 字符，避免占用过多上下文。
+
+## 子代理
+
+模型可以调用 `subagent` 工具把任务交给独立上下文的子代理：
+
+```json
+{ "id": "research", "content": "调研 ...", "get_msg": false, "timeout": 60 }
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `id` | 子代理标识，相同 id 复用同一份上下文 |
+| `content` | 要发送的消息，**必须自包含**（子代理看不到主对话） |
+| `get_msg` | `true` 时只返回该子代理最新的一条消息，忽略 `content` |
+| `timeout` | 超时秒数，默认 60 |
+
+- 上下文存 `messages/subagent/<uid>.<topicid>.<子代理id>.json`（私聊 topicid 记为 `0`），结构同会话文件
+- 子代理按会话隔离：不同聊天/话题下的同名 id 互不影响
+- 子代理不向用户发消息，工具进度静默；`send_file` 不可用
+- 子代理内部不能再调用 `subagent`（禁止嵌套）
+- 同一 `id` 串行执行；`/stop` 会中止它正在执行的工具调用
+
+## 图片查看
+
+模型可以调用 `view_image` 查看本地文件或网络图片：
+
+```json
+{ "path": "/path/to/a.png" }        // 或 https://example.com/a.jpg
+```
+
+- 支持 jpg / jpeg / png / gif / webp，单张上限 16MB
+- 网络图片先下载到 `tmp/`（运行目录下，启动时自动清空）
+- 图片通过 Files API 上传得到 `file_id`，按内容哈希缓存在 `config/deepseek/file_id.json`，同一张图不会重复上传
+- 上传成功的文件保留在服务端；只有上传失败（存储已满等）时才删除最旧的一批文件后重试
+- `config/models.json` 的 `files_base_url` 指定 Files API 根地址，未配置时从模型 `base_url` 去掉 `/v1` 推导
+- 图片只在当轮上下文生效，之后折叠为 `[图片 xN]` 占位，避免重复计费
+
+## 上下文压缩
+
+对话变长时，可以把历史压缩成一段记忆，避免上下文无限增长：
+
+- **手动**：`/compact`
+- **自动**：收到新消息时，若上一次请求的 `usage.total_tokens` 超过 `config.context_window`（默认 800000），先压缩再处理这条消息
+
+压缩流程：
+
+1. 把「已有 `memory` + 当前 `messages`」交给模型，用固定的压缩提示词生成摘要
+2. 摘要写入会话文件的 `memory` 字段（不限制长度）
+3. `messages` 只保留**最后一条用户消息**，其余全部清空
+4. 之后的请求把 `memory` 拼到 system 提示词末尾（`## 历史记忆`）
+
+压缩请求本身不带系统提示词和工具定义，只使用压缩提示词。
+
+会话文件结构因此变成：
+
+```json
+{
+  "create_time": 1730000000,
+  "title": "话题标题",
+  "memory": "历史对话：……",
+  "usage": { "total_tokens": 0 },
+  "messages": []
+}
+```
 
 ## 消息长度
 
@@ -166,7 +233,7 @@ Telegram 单条文本上限 4096 字符（UTF-16 码元）。模型被要求在�
 
 ## 注意事项
 
-1. **白名单**：仅 `allow_user_id` 指定的用户可使用；其他人发消息会收到自己的 ID 方便配置。
+1. **白名单**：仅 `allow_user_id` 列表中的用户可使用；其他人发消息会收到自己的 ID 方便配置。
 2. **群聊 / 话题**：需要在 @BotFather 关闭 privacy mode，否则机器人收不到普通消息；群里的论坛话题还需授予「Manage Topics」权限。
 3. **工作目录共享**：所有会话的 `exec` 和文件工具都在同一个 `workspace/` 下，会话之间不隔离文件与进程。
 

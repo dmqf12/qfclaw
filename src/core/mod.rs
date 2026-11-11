@@ -4,5 +4,7 @@
 
 pub mod agent;
 pub mod command;
+pub mod compact;
 pub mod llm;
 pub mod session;
+pub mod subagent;

@@ -5,16 +5,17 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 use super::{Button, Callback, Channel, InboundMessage, MsgId, MsgKind, OutboundMessage};
+use crate::log;
 
 /// Telegram 单条消息文本上限（UTF-16 码元）。
 const MAX_TEXT_UNITS: usize = 4000;
@@ -65,6 +66,24 @@ fn split_message(text: &str, max: usize) -> Vec<String> {
     parts
 }
 
+/// Telegram API 请求超时（上传大文件需要时间）。
+const API_TIMEOUT_SECS: u64 = 180;
+
+/// Bot 菜单里的指令（硬编码，避免与配置文件不同步）。
+///
+/// 顺序即 Telegram 客户端里展示的顺序；新增指令时这里和
+/// `main::handle_msg` 的分发列表要一起改。
+const COMMANDS: &[(&str, &str)] = &[
+    ("new", "✅开启新对话"),
+    ("clear", "🧹删除当前对话"),
+    ("status", "📊查看当前状态"),
+    ("compact", "🗜压缩上下文"),
+    ("reasoning", "🧠选择推理模式"),
+    ("context", "📏设置上下文窗口"),
+    ("stop", "⏹️停止当前任务"),
+    ("restart", "🔄重新启动网关"),
+];
+
 /// 把会话键拆成 `(chat_id, 话题 ID)`。
 ///
 /// 普通聊天直接用 `chat_id`；论坛话题（Threaded Mode）用 `chat_id:thread_id`。
@@ -90,8 +109,8 @@ fn join_chat(chat_id: i64, thread: Option<i64>) -> String {
 pub struct TelegramChannel {
     token: String,
     base_url: String,
-    commands: Vec<Value>,
-    allow_user_id: String,
+    /// 白名单用户 ID（可配置多个）。
+    allow_user_ids: Vec<String>,
     client: Client,
 }
 
@@ -102,15 +121,28 @@ impl TelegramChannel {
         if token.is_empty() {
             bail!("未找到token")
         }
+        let allow_user_ids = parse_allow_ids(&json["allow_user_id"]);
+        log::info(
+            "tg",
+            format!(
+                "Telegram 初始化：bot_id={}，白名单 {} 个用户（{}）",
+                json["bot_id"].as_i64().unwrap_or(0),
+                allow_user_ids.len(),
+                allow_user_ids.join(",")
+            ),
+        );
         Ok(Self {
             token: token.to_string(),
             base_url: json["base_url"]
                 .as_str()
                 .unwrap_or("https://api.telegram.org/bot")
                 .to_string(),
-            commands: json["commands"].as_array().cloned().unwrap_or_default(),
-            allow_user_id: json["allow_user_id"].as_i64().unwrap_or(0).to_string(),
-            client: Client::new(),
+            allow_user_ids,
+            // 统一超时：避免网络异常时请求永久挂起（上传大文件也需要时间）
+            client: Client::builder()
+                .timeout(Duration::from_secs(API_TIMEOUT_SECS))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
         })
     }
 
@@ -158,18 +190,20 @@ impl TelegramChannel {
             FILE_MAX_BYTES
         };
         if size > limit {
-            bail!(
-                "文件过大: {} 字节（{} 上限 {} 字节）",
-                size,
-                method,
-                limit
-            );
+            bail!("文件过大: {} 字节（{} 上限 {} 字节）", size, method, limit);
         }
         let data = tokio::fs::read(path).await?;
         let hash = hash_bytes(&data);
 
         // 命中缓存：直接拿 file_id 发送，省掉一次上传。
         if let Some(file_id) = cached_file_id(path, &hash).await {
+            log::info(
+                "tg",
+                format!(
+                    "发送文件 {path}（{} 字节，{method}，命中 file_id 缓存）",
+                    size
+                ),
+            );
             let mut body = serde_json::Map::new();
             body.insert("chat_id".into(), json!(chat_id));
             body.insert(field.into(), json!(file_id));
@@ -184,6 +218,10 @@ impl TelegramChannel {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "file".to_string());
+        log::info(
+            "tg",
+            format!("发送文件 {path}（{size} 字节，{method}，需上传）"),
+        );
         let mut form = reqwest::multipart::Form::new()
             .text("chat_id", chat_id.to_string())
             .part(
@@ -247,7 +285,10 @@ impl TelegramChannel {
                 }
             }
         };
-        let id = resp["result"]["message_id"].as_u64().unwrap_or(0).to_string();
+        let id = resp["result"]["message_id"]
+            .as_u64()
+            .unwrap_or(0)
+            .to_string();
         if let Some(ttl) = msg.ttl {
             self.delete_after(&msg.chat_id, &id, ttl);
         }
@@ -274,10 +315,12 @@ impl TelegramChannel {
 #[async_trait]
 impl Channel for TelegramChannel {
     async fn init(&self) -> Result<()> {
-        if !self.commands.is_empty() {
-            self.api("setMyCommands", &json!({ "commands": self.commands }))
-                .await?;
-        }
+        let commands: Vec<Value> = COMMANDS
+            .iter()
+            .map(|(command, description)| json!({ "command": command, "description": description }))
+            .collect();
+        self.api("setMyCommands", &json!({ "commands": commands }))
+            .await?;
         Ok(())
     }
 
@@ -298,12 +341,20 @@ impl Channel for TelegramChannel {
                 Ok(resp) => match resp.json::<Value>().await {
                     Ok(json) => {
                         if let Some(results) = json["result"].as_array() {
+                            if !results.is_empty() {
+                                log::info(
+                                    "tg",
+                                    format!("拉取到 {} 条更新（offset={offset}）", results.len()),
+                                );
+                            }
                             for update in results {
                                 if let Some(id) = update["update_id"].as_i64() {
                                     offset = id + 1;
                                 }
                                 // 回调需要立即回执，否则客户端一直转圈
-                                if let Some(cq) = update.get("callback_query") && let Some(cid) = cq["id"].as_str() {
+                                if let Some(cq) = update.get("callback_query")
+                                    && let Some(cid) = cq["id"].as_str()
+                                {
                                     self.answer_callback(cid).await
                                 }
                                 if let Some(msg) = parse_update(update) {
@@ -312,9 +363,9 @@ impl Channel for TelegramChannel {
                             }
                         }
                     }
-                    Err(e) => eprintln!("解析新消息失败: {e}"),
+                    Err(e) => log::warn("tg", format!("解析新消息失败：{e}")),
                 },
-                Err(e) => eprintln!("拉取新消息失败: {e}"),
+                Err(e) => log::warn("tg", format!("拉取新消息失败（稍后重试）：{e}")),
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -329,9 +380,24 @@ impl Channel for TelegramChannel {
         }
 
         // 超长回复按 `<cut/>` 分段后逐条发送，按钮只挂在最后一条
-        let max = if msg.fold { MAX_FOLD_UNITS } else { MAX_TEXT_UNITS };
+        let max = if msg.fold {
+            MAX_FOLD_UNITS
+        } else {
+            MAX_TEXT_UNITS
+        };
         let mut parts = split_message(&msg.content, max);
         let last = parts.pop().ok_or_else(|| anyhow!("不能发送空消息"))?;
+        log::info(
+            "tg",
+            format!(
+                "发送 chat={} {:?}：{} 字，{} 段{}",
+                msg.chat_id,
+                msg.kind,
+                msg.content.chars().count(),
+                parts.len() + 1,
+                if msg.fold { "，折叠" } else { "" }
+            ),
+        );
         for part in &parts {
             self.send_text(&msg, part, false).await?;
         }
@@ -343,8 +409,8 @@ impl Channel for TelegramChannel {
         Ok(())
     }
 
-    fn get_allow_id(&self) -> String {
-        self.allow_user_id.clone()
+    fn is_allowed(&self, user_id: &str) -> bool {
+        self.allow_user_ids.iter().any(|id| id == user_id)
     }
 
     /// 删除当前话题（连带话题内全部消息）。
@@ -386,6 +452,26 @@ const FILE_ID_PATH: &str = "../config/telegram/file_id.json";
 
 /// 串行化 file_id 缓存的读改写，避免并发发送时互相覆盖。
 static FILE_ID_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// 解析白名单配置：支持 `[123, 456]` 数组，也兼容旧的单个数字/字符串写法。
+///
+/// 空值、`0` 与非法项会被忽略；解析结果为空时任何人都无法使用。
+fn parse_allow_ids(value: &Value) -> Vec<String> {
+    let items: Vec<&Value> = match value {
+        Value::Array(list) => list.iter().collect(),
+        Value::Null => Vec::new(),
+        single => vec![single],
+    };
+    items
+        .into_iter()
+        .filter_map(|item| match item {
+            Value::Number(n) => n.as_i64().map(|n| n.to_string()),
+            Value::String(s) => Some(s.trim().to_string()),
+            _ => None,
+        })
+        .filter(|id| !id.is_empty() && id != "0")
+        .collect()
+}
 
 /// 取响应里的 message_id。
 fn msg_id(value: &Value) -> MsgId {
@@ -440,7 +526,7 @@ async fn save_file_id(path: String, hash: String, file_id: String) {
         let _ = tokio::fs::create_dir_all(dir).await;
     }
     if let Err(e) = tokio::fs::write(FILE_ID_PATH, cache.to_string()).await {
-        eprintln!("写入 file_id 缓存失败: {e}");
+        log::warn("tg", format!("写入 file_id 缓存失败：{e}"));
     }
 }
 
@@ -472,7 +558,10 @@ fn parse_update(update: &Value) -> Option<InboundMessage> {
             content: String::new(),
             callback: Some(Callback {
                 data: cq["data"].as_str().unwrap_or_default().to_string(),
-                msg_id: cq["message"]["message_id"].as_u64().unwrap_or(0).to_string(),
+                msg_id: cq["message"]["message_id"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .to_string(),
             }),
             topic_name: None,
         });

@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{Tool, ToolContext, notify};
 
@@ -24,6 +24,27 @@ fn is_binary(file: &str) -> Result<bool, String> {
         .read_to_end(&mut probe)
         .map_err(|e| format!("无法读取文件 {file}: {e}"))?;
     Ok(probe.contains(&0))
+}
+
+/// 字节位置所在的行号（1 起）。
+fn line_of(content: &str, pos: usize) -> usize {
+    content[..pos].bytes().filter(|b| *b == b'\n').count() + 1
+}
+
+/// 取指定行前后的片段（带行号），用于定位差异。
+fn context_around(content: &str, line: usize, span: usize) -> String {
+    let start = line.saturating_sub(span).max(1);
+    let end = line + span;
+    content
+        .lines()
+        .enumerate()
+        .filter(|(i, _)| {
+            let n = i + 1;
+            n >= start && n <= end
+        })
+        .map(|(i, l)| format!("{}| {l}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// 读取文本文件，返回带行号的内容。
@@ -194,6 +215,9 @@ impl Tool for EditTool {
                 new.chars().count()
             );
         }
+        if !std::path::Path::new(file).exists() {
+            return format!("❌ 文件不存在: {file}");
+        }
         match is_binary(file) {
             Err(e) => return e,
             Ok(true) => return format!("❌ 无法编辑 {file}：这是二进制文件"),
@@ -207,15 +231,35 @@ impl Tool for EditTool {
             Err(e) => return format!("读取失败 {file}: {e}"),
         };
 
-        match content.matches(old).count() {
-            0 => return "❌ 未找到要替换的内容，请确认 old_string 与文件完全一致".to_string(),
-            1 => {}
+        // 定位：只允许唯一匹配，避免改错位置
+        let pos = match content.matches(old).count() {
+            0 => {
+                // 用首行定位，方便排查空白 / 换行 / 全角半角差异
+                let first_line = old.lines().next().unwrap_or(old);
+                let hint = match content.find(first_line) {
+                    Some(hit) => {
+                        let line = line_of(&content, hit);
+                        format!(
+                            "文件第 {line} 行有相同的开头，请检查空白或换行差异：\n{}",
+                            context_around(&content, line, 2)
+                        )
+                    }
+                    None => format!("old_string 的首行在文件中不存在：{first_line}"),
+                };
+                return format!(
+                    "❌ 未找到要替换的内容，请确认 old_string 与文件完全一致。\n{hint}"
+                );
+            }
+            1 => content.find(old).unwrap_or(0),
             n => return format!("❌ old_string 匹配到 {n} 处，请提供更长的唯一上下文"),
-        }
+        };
 
+        let start = line_of(&content, pos);
+        let end = start + old.lines().count().saturating_sub(1);
         let updated = content.replacen(old, new, 1);
         match fs::write(file, updated) {
-            Ok(_) => format!("✅ 编辑成功: {file}"),
+            Ok(_) if start == end => format!("✅ 编辑成功: {file}（第 {start} 行）"),
+            Ok(_) => format!("✅ 编辑成功: {file}（第 {start}-{end} 行）"),
             Err(e) => format!("写入失败 {file}: {e}"),
         }
     }

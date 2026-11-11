@@ -1,7 +1,9 @@
 {
   "config": {
     "reasoning": "enabled",
-    "stream": false
+    "stream": false,
+    "files_base_url": "https://api.deepseek.com",
+    "context_window": 800000
   },
   "deepseek": {
     "base_url": "https://api.deepseek.com/v1",

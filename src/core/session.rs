@@ -1,33 +1,47 @@
 //! 会话存储。
 //!
-//! 一个对话对应一个文件：私聊/群聊是 `messages/<chat_id>.json`，
-//! Telegram 论坛话题（Threaded Mode）是 `messages/<chat_id>:<thread_id>.json`。
-//! 对话之间互不影响，文件结构：
+//! 对话内容与元信息分开存放，一个对话对应两个文件：
 //!
-//! ```json
-//! {
-//!   "create_time": 1730000000,
-//!   "title": "话题标题",
-//!   "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 },
-//!   "messages": []
-//! }
-//! ```
+//! - 对话：`messages/<chat>.json`，结构 `{ "memory": "历史记忆", "messages": [...] }`
+//! - 元信息：`messages/meta/<chat>.info.json`，结构
+//!   `{ "create_time": 1730000000, "title": "话题标题", "usage": {} }`
+//!
+//! `<chat>` 为会话键（`chat_id` 或 `chat_id:thread_id`）。
+//! 压缩记忆与消息一起存放在对话文件里（两者总是一起写）；
+//! 标题 / usage 这类只关心元数据的操作只碰很小的 meta 文件，
+//! `/status` 也不会解析整份消息历史。
+//!
+//! 旧版本把 state 与消息放在同一个文件里、memory 放在 meta 里，
+//! 读取时都会自动迁移到当前结构。
 
 use std::fs;
+use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use once_cell::sync::Lazy;
+use serde_json::{Value, json};
+
+use crate::log;
 
 const MSG_DIR: &str = "../messages";
+const META_DIR: &str = "../messages/meta";
+
+/// 串行化状态文件的读改写，避免并发写入互相覆盖。
+static META_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// 文件名安全化（Telegram 的 chat / thread 都是数字，这里只兜底）。
 fn file_key(chat: &str) -> String {
     chat.replace(['/', '\\'], "_")
 }
 
-fn path(chat: &str) -> String {
+fn messages_path(chat: &str) -> String {
     format!("{MSG_DIR}/{}.json", file_key(chat))
+}
+
+fn info_path(chat: &str) -> String {
+    format!("{META_DIR}/{}.info.json", file_key(chat))
 }
 
 fn now() -> u64 {
@@ -37,51 +51,138 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// 空对话结构。
-fn empty() -> Value {
-    json!({ "create_time": now(), "title": "", "usage": {}, "messages": [] })
+/// 空状态结构。
+fn empty_info() -> Value {
+    json!({ "create_time": now(), "title": "", "usage": {} })
 }
 
-/// 读取对话文件；缺失或损坏时返回空结构（不落盘）。
-fn load(chat: &str) -> Value {
-    let mut doc = match qffunc::file_to_json(&path(chat)) {
-        Ok(value) if value.is_object() => value,
-        _ => empty(),
+/// 原子写入 JSON（临时文件 + rename）。
+fn write_json(path: &str, doc: &Value) -> Result<()> {
+    if let Some(dir) = Path::new(path).parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = format!("{path}.tmp");
+    serde_json::to_writer_pretty(fs::File::create(&tmp)?, doc)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// 读取 JSON 对象；缺失时返回 `None`，损坏时先备份再返回 `None`。
+fn read_json(path: &str) -> Option<Value> {
+    match qffunc::file_to_json(path) {
+        Ok(value) if value.is_object() => Some(value),
+        _ => {
+            if fs::metadata(path).is_ok() {
+                let backup = format!("{path}.corrupt");
+                if let Err(e) = fs::rename(path, &backup) {
+                    log::warn("session", format!("备份损坏的文件失败 {path}：{e}"));
+                }
+            }
+            None
+        }
+    }
+}
+
+/// 补全状态字段的默认值。
+fn normalize_info(mut info: Value) -> Value {
+    if info["create_time"].as_u64().is_none() {
+        info["create_time"] = json!(now());
+    }
+    if !info["title"].is_string() {
+        info["title"] = json!("");
+    }
+    if !info["usage"].is_object() {
+        info["usage"] = json!({});
+    }
+    info
+}
+
+/// 读取状态（不加锁）。
+fn read_info(chat: &str) -> Value {
+    normalize_info(read_json(&info_path(chat)).unwrap_or_else(empty_info))
+}
+
+/// 读取状态，必要时先迁移旧格式（对外入口用）。
+fn info(chat: &str) -> Value {
+    migrate_if_needed(chat);
+    read_info(chat)
+}
+
+/// 旧格式迁移：状态字段原本与消息存在同一文件里。
+///
+/// 只在状态文件缺失时执行一次；调用方需持有 `META_LOCK`。
+fn migrate_unlocked(chat: &str) {
+    if Path::new(&info_path(chat)).exists() {
+        return;
+    }
+    let Some(doc) = read_json(&messages_path(chat)) else {
+        return;
     };
+    // memory 属于对话内容，迁移后仍留在对话文件里
+    let has_state = ["create_time", "title", "usage"]
+        .iter()
+        .any(|key| doc.get(key).is_some());
+    if !has_state {
+        return;
+    }
+    let info = normalize_info(json!({
+        "create_time": doc.get("create_time").cloned().unwrap_or(Value::Null),
+        "title": doc.get("title").cloned().unwrap_or(Value::Null),
+        "usage": doc.get("usage").cloned().unwrap_or(Value::Null),
+    }));
+    match write_json(&info_path(chat), &info) {
+        Ok(_) => log::info("session", format!("会话状态已迁移到 meta: {chat}")),
+        Err(e) => log::error("session", format!("迁移会话状态失败 {chat}：{e}")),
+    }
+}
+
+fn migrate_if_needed(chat: &str) {
+    let _guard = META_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    migrate_unlocked(chat);
+}
+
+/// 读取状态 → 修改 → 原子写回（全程持锁）。
+fn update_info<F: FnOnce(&mut Value)>(chat: &str, f: F) -> Result<()> {
+    let _guard = META_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    migrate_unlocked(chat);
+    let mut info = read_info(chat);
+    f(&mut info);
+    write_json(&info_path(chat), &info)
+}
+
+/// 读取对话文件：`{ "memory": "", "messages": [] }`。
+fn read_chat_doc(chat: &str) -> Value {
+    let mut doc = read_json(&messages_path(chat)).unwrap_or_else(|| json!({}));
     if !doc["messages"].is_array() {
         doc["messages"] = json!([]);
     }
-    if !doc["usage"].is_object() {
-        doc["usage"] = json!({});
-    }
-    if doc["create_time"].as_u64().is_none() {
-        doc["create_time"] = json!(now());
-    }
-    if !doc["title"].is_string() {
-        doc["title"] = json!("");
+    if !doc["memory"].is_string() {
+        doc["memory"] = json!("");
     }
     doc
 }
 
-/// 原子写入对话文件。
-fn store(chat: &str, doc: &Value) -> Result<()> {
-    fs::create_dir_all(MSG_DIR)?;
-    let tmp = format!("{MSG_DIR}/.{}.tmp", file_key(chat));
-    serde_json::to_writer_pretty(fs::File::create(&tmp)?, doc)?;
-    fs::rename(&tmp, path(chat))?;
-    Ok(())
-}
-
 /// 读取对话历史（不含 system）。
 pub fn load_history(chat: &str) -> Result<Vec<Value>> {
-    Ok(load(chat)["messages"].as_array().cloned().unwrap_or_default())
+    Ok(read_chat_doc(chat)["messages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default())
 }
 
-/// 保存对话历史（去掉首条 system）。
+/// 保存对话历史（去掉首条 system），保留记忆字段。
 pub fn save(chat: &str, messages: &[Value]) -> Result<()> {
-    let mut doc = load(chat);
+    // 先确保旧格式的元信息已迁移，避免随后的写入把标题 / usage 丢掉
+    migrate_if_needed(chat);
+    let mut doc = read_chat_doc(chat);
     doc["messages"] = json!(messages.get(1..).unwrap_or_default());
-    store(chat, &doc)
+    // 元信息已迁到 meta 后，对话文件只保留记忆与消息
+    let doc = if Path::new(&info_path(chat)).exists() {
+        json!({ "memory": doc["memory"].clone(), "messages": doc["messages"].clone() })
+    } else {
+        doc
+    };
+    write_json(&messages_path(chat), &doc)
 }
 
 /// 记录最近一次请求的 usage。
@@ -89,51 +190,185 @@ pub fn record_usage(chat: &str, usage: &Value) -> Result<()> {
     if !usage.is_object() {
         return Ok(());
     }
-    let mut doc = load(chat);
-    doc["usage"] = usage.clone();
-    store(chat, &doc)
+    update_info(chat, |info| info["usage"] = usage.clone())
 }
 
-/// 当前对话的 usage。
-pub fn usage(chat: &str) -> Value {
-    load(chat)["usage"].clone()
+/// 读取长期记忆（存在对话文件里）。
+///
+/// 旧版本的记忆写在 meta 里，读到就顺手迁回对话文件。
+pub fn memory(chat: &str) -> String {
+    let doc = read_chat_doc(chat);
+    let memory = doc["memory"].as_str().unwrap_or_default().to_string();
+    if !memory.trim().is_empty() {
+        return memory;
+    }
+    // 兼容旧数据：meta 里的记忆迁回对话文件
+    let legacy = read_info(chat)["memory"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if legacy.trim().is_empty() {
+        return String::new();
+    }
+    let mut doc = read_chat_doc(chat);
+    doc["memory"] = json!(legacy);
+    if let Err(e) = write_json(&messages_path(chat), &doc) {
+        log::warn("session", format!("迁移记忆到对话文件失败 {chat}：{e}"));
+    }
+    legacy
+}
+
+/// 压缩结果写回：更新记忆并替换消息列表（`messages` 不含 system）。
+///
+/// 同时清空 `usage`：压缩后上下文已经重建，旧的 token 数不再代表当前大小，
+/// 留着会让下一轮再次判定「需要压缩」，从而反复压缩。
+pub fn apply_compact(chat: &str, memory: &str, messages: &[Value]) -> Result<()> {
+    let mut doc = read_chat_doc(chat);
+    doc["memory"] = json!(memory);
+    doc["messages"] = json!(messages);
+    write_json(&messages_path(chat), &doc)?;
+    update_info(chat, |info| info["usage"] = Value::Null)
+}
+
+/// 对话概览：`(标题, 最近一次请求的总 token)`。
+pub fn status(chat: &str) -> (String, u64) {
+    let meta = info(chat);
+    (
+        meta["title"].as_str().unwrap_or_default().to_string(),
+        meta["usage"]["total_tokens"].as_u64().unwrap_or(0),
+    )
 }
 
 /// 重置对话：清空历史与 usage，重置创建时间；话题标题保留。
 pub fn reset(chat: &str) -> Result<()> {
-    let mut doc = empty();
-    doc["title"] = json!(title(chat));
-    store(chat, &doc)
+    let title = info(chat)["title"].clone();
+    write_json(
+        &messages_path(chat),
+        &json!({ "memory": "", "messages": [] }),
+    )?;
+    update_info(chat, move |info| {
+        *info = empty_info();
+        info["title"] = title;
+    })
 }
 
-/// 删除当前对话：消息文件移到 `messages/clear/` 下保留。
+/// 删除当前对话：消息与状态文件移到 `messages/clear/` 下保留。
 pub fn clear(chat: &str) -> Result<()> {
-    let file = path(chat);
-    if !std::path::Path::new(&file).exists() {
-        return Ok(());
-    }
     let dir = format!("{MSG_DIR}/clear");
     fs::create_dir_all(&dir)?;
-    let mut dest = format!("{dir}/{}.json", file_key(chat));
-    // 已有同名归档时加时间戳，避免覆盖
-    if std::path::Path::new(&dest).exists() {
-        dest = format!("{dir}/{}.{}.json", file_key(chat), now());
+    let key = file_key(chat);
+    for file in [messages_path(chat), info_path(chat)] {
+        if !Path::new(&file).exists() {
+            continue;
+        }
+        let name = Path::new(&file)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("{key}.json"));
+        let mut dest = format!("{dir}/{name}");
+        // 已有同名归档时加时间戳，避免覆盖
+        if Path::new(&dest).exists() {
+            dest = format!("{dir}/{}.{name}", now());
+        }
+        fs::rename(&file, dest)?;
     }
-    fs::rename(&file, dest)?;
     Ok(())
 }
 
 /// 记录话题标题（来自 Telegram 的服务消息或建话题的返回值）。
 pub fn set_title(chat: &str, name: &str) -> Result<()> {
-    let mut doc = load(chat);
-    if doc["title"].as_str() == Some(name) {
+    if info(chat)["title"].as_str() == Some(name) {
         return Ok(());
     }
-    doc["title"] = json!(name);
-    store(chat, &doc)
+    update_info(chat, |info| info["title"] = json!(name))
 }
 
-/// 话题标题；没有时返回空串。
-pub fn title(chat: &str) -> String {
-    load(chat)["title"].as_str().unwrap_or_default().to_string()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup() {
+        let dir = Path::new("/tmp/qfclaw-session-test/workspace");
+        let _ = fs::remove_dir_all("/tmp/qfclaw-session-test");
+        fs::create_dir_all(dir).unwrap();
+        std::env::set_current_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn meta_split_and_migrate() {
+        // 用例会切换工作目录，和指令测试互斥
+        let _guard = crate::CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        setup();
+        let chat = "123:45";
+        // 旧格式：状态与消息同文件
+        fs::create_dir_all("../messages").unwrap();
+        let old = json!({
+            "create_time": 1700000000u64,
+            "title": "旧标题",
+            "memory": "旧记忆",
+            "usage": { "total_tokens": 123 },
+            "messages": [
+                { "role": "user", "content": "hi" },
+                { "role": "assistant", "content": "hello" }
+            ]
+        });
+        fs::write(
+            "../messages/123:45.json",
+            serde_json::to_string(&old).unwrap(),
+        )
+        .unwrap();
+
+        // 1. 迁移：读状态时自动生成 meta，旧状态不丢
+        assert_eq!(status(chat), ("旧标题".to_string(), 123));
+        assert!(Path::new("../messages/meta/123:45.info.json").exists());
+        // 2. 历史可读
+        assert_eq!(load_history(chat).unwrap().len(), 2);
+        // 3. usage 更新只碰 meta
+        record_usage(chat, &json!({ "total_tokens": 456 })).unwrap();
+        assert_eq!(status(chat).1, 456);
+        assert_eq!(memory(chat), "旧记忆");
+        // 4. 保存后消息文件变新结构，meta 不受影响
+        save(
+            chat,
+            &[
+                json!({ "role": "system", "content": "sys" }),
+                json!({ "role": "user", "content": "x" }),
+            ],
+        )
+        .unwrap();
+        let text = fs::read_to_string("../messages/123:45.json").unwrap();
+        let doc: Value = serde_json::from_str(&text).unwrap();
+        // 对话文件只剩记忆与消息，元信息搬进了 meta
+        assert_eq!(doc["memory"], "旧记忆");
+        assert!(doc.get("title").is_none() && doc.get("usage").is_none());
+        assert_eq!(doc["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(status(chat), ("旧标题".to_string(), 456));
+        let meta: Value =
+            serde_json::from_str(&fs::read_to_string("../messages/meta/123:45.info.json").unwrap())
+                .unwrap();
+        assert!(meta.get("memory").is_none());
+        // 5. 压缩写记忆 + 替换消息
+        apply_compact(
+            chat,
+            "新记忆",
+            &[json!({ "role": "user", "content": "keep" })],
+        )
+        .unwrap();
+        assert_eq!(memory(chat), "新记忆");
+        assert_eq!(load_history(chat).unwrap().len(), 1);
+        // 6. 重置清空历史与记忆，保留标题
+        reset(chat).unwrap();
+        assert_eq!(status(chat).0, "旧标题");
+        assert!(load_history(chat).unwrap().is_empty());
+        assert_eq!(memory(chat), "");
+        // 7. clear 归档两个文件
+        clear(chat).unwrap();
+        assert!(!Path::new("../messages/123:45.json").exists());
+        assert!(!Path::new("../messages/meta/123:45.info.json").exists());
+        assert!(Path::new("../messages/clear/123:45.json").exists());
+        assert!(Path::new("../messages/clear/123:45.info.json").exists());
+
+        std::env::set_current_dir("/").ok();
+        let _ = fs::remove_dir_all("/tmp/qfclaw-session-test");
+    }
 }

@@ -5,14 +5,14 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 
 use super::task::{TASKS, TaskHandle};
-use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify, truncate};
+use super::{MAX_OUTPUT_CHARS, NOTIFY_TTL_SECS, Tool, ToolContext, notify, truncate};
 use crate::channel::{MsgKind, OutboundMessage};
 
 pub struct ExecTool;
@@ -64,17 +64,19 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
     };
     let abs_task_dir = task_dir.to_string_lossy().to_string();
 
-    // 执行提示（命令结束后删除）
+    // 执行提示（命令结束后删除；子代理上下文不发）
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
-    let msg_id = ctx
-        .channel
-        .send(
-            OutboundMessage::text(ctx.chat_id.clone(), &start_msg)
-                .kind(MsgKind::Text)
-                .fold(),
-        )
-        .await
-        .ok();
+    if !ctx.silent {
+        let _ = ctx
+            .channel
+            .send(
+                OutboundMessage::text(ctx.chat_id.clone(), &start_msg)
+                    .kind(MsgKind::Text)
+                    .fold()
+                    .ttl(NOTIFY_TTL_SECS),
+            )
+            .await;
+    }
 
     // 准备脚本：激活虚拟环境后再执行命令
     if let Err(e) = fs::create_dir_all(&abs_task_dir) {
@@ -90,6 +92,10 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         .arg(format!("{abs_task_dir}/exec.sh"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // 独立进程组：取消时可以连同子进程一起结束
+        .process_group(0)
+        // 任务被取消/超时丢弃时一并结束子进程，避免残留
+        .kill_on_drop(true)
         .spawn()
     {
         Ok(child) => child,
@@ -118,51 +124,44 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
     });
 
     // 等待：正常结束 / 超时 / 取消
+    let cancel = ctx.cancel_token().await;
     let outcome = tokio::select! {
-        _ = ctx.cancel.cancelled() => Outcome::Cancelled,
+        _ = cancel.cancelled() => Outcome::Cancelled,
         r = timeout(Duration::from_secs(timeout_secs), child.wait()) => match r {
             Ok(wait) => Outcome::Done(wait),
             Err(_) => Outcome::Timeout,
         },
     };
 
-    let result = match outcome {
+    match outcome {
         Outcome::Done(wait) => {
             let log = output.lock().await.clone();
-            let code = wait.map(|s| s.code().unwrap_or(0)).unwrap_or(-1);
+            // code() 为 None 表示被信号终止，不能当成成功
+            let code = match wait {
+                Ok(status) => status.code().unwrap_or(-1),
+                Err(_) => -1,
+            };
             let _ = fs::remove_dir_all(&abs_task_dir);
             format!("⚡任务完成 (Code {}):\n{}", code, log)
         }
-        Outcome::Cancelled => {
-            let _ = child.kill().await;
-            let _ = fs::remove_dir_all(&abs_task_dir);
-            "🛑 任务已取消".to_string()
-        }
-        Outcome::Timeout => {
-            // 转入后台，交由 operate_task 管理
+        // 超时与用户中止都保留现场：进程转入后台，由 operate_task 继续管理
+        outcome @ (Outcome::Timeout | Outcome::Cancelled) => {
+            let pid = child.id();
             TASKS.lock().await.insert(
                 task_id.clone(),
                 TaskHandle {
                     child,
                     output: output.clone(),
+                    pid,
                 },
             );
             let log = output.lock().await.clone();
-            let msg = format!("⏳任务超时转入后台，ID: {task_id}");
+            let msg = match outcome {
+                Outcome::Timeout => format!("⏳任务超时转入后台，ID: {task_id}"),
+                _ => format!("⏸ 用户中止，任务已转入后台，ID: {task_id}"),
+            };
             notify(ctx, &msg).await;
             format!("{}\n当前输出:\n{}", msg, log)
         }
-    };
-
-    // 删除执行提示
-    if let Some(id) = msg_id {
-        let channel = ctx.channel.clone();
-        let chat_id = ctx.chat_id.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            let _ = channel.delete(&chat_id, &id).await;
-        });
     }
-
-    result
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
@@ -15,6 +15,8 @@ use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify, truncate};
 pub struct TaskHandle {
     pub child: Child,
     pub output: Arc<Mutex<String>>,
+    /// 进程组 id，终止时连同子进程一起结束。
+    pub pid: Option<u32>,
 }
 
 /// 全部后台任务。
@@ -60,12 +62,28 @@ impl Tool for TaskTool {
 
         match order {
             "kill" => {
+                // 连同进程组一起结束，避免 bash 下的命令残留
+                if let Some(pid) = task.pid {
+                    let _ = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(format!("kill -KILL -- -{pid} 2>/dev/null"))
+                        .status();
+                }
                 let _ = task.child.kill().await;
                 tasks.remove(task_id);
                 format!("🛑 终止任务：{task_id}")
             }
             "check" => {
-                let log = task.output.lock().await;
+                let log = task.output.lock().await.clone();
+                // 任务已退出：回传结束码并从表中移除，避免任务表无限增长
+                if let Ok(Some(status)) = task.child.try_wait() {
+                    let code = status.code().unwrap_or(-1);
+                    tasks.remove(task_id);
+                    return format!(
+                        "✅ 任务已结束 (Code {code}):\n{}",
+                        truncate(&log, MAX_OUTPUT_CHARS)
+                    );
+                }
                 if log.is_empty() {
                     "等待输出...".to_string()
                 } else {

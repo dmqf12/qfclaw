@@ -5,7 +5,7 @@
 
 pub mod telegram;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -157,5 +157,6 @@ pub trait Channel: Send + Sync + 'static {
     /// 删除消息。
     async fn delete(&self, chat_id: &str, id: &str) -> Result<()>;
 
-    fn get_allow_id(&self) -> String;
+    /// 是否为白名单用户（支持配置多个）。
+    fn is_allowed(&self, user_id: &str) -> bool;
 }
