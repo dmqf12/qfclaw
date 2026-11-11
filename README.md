@@ -25,7 +25,6 @@
 ├── config/
 │   ├── bot.json           # Telegram 配置
 │   ├── models.json        # 模型配置
-│   ├── Soul.md            # 人设：核心设定
 │   ├── Agent.md           # 人设：行为准则
 │   ├── User.md            # 人设：用户信息
 │   └── telegram/
@@ -91,7 +90,7 @@ Bot 菜单里的指令不通过配置文件下发，硬编码在 `src/channel/te
 
 ### 人设文件
 
-`config/Soul.md`、`Agent.md`、`User.md` 会按顺序拼接成 system prompt，修改后下一次请求生效（无需重启）。
+`config/Agent.md`、`User.md` 会按顺序拼接成 system prompt，修改后下一次请求生效（无需重启）。
 
 ## 构建与部署
 
