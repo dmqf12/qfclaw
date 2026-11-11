@@ -133,7 +133,7 @@ journalctl --user -u qfclaw -f    # 查看日志
 | `/status` | 显示话题标题与上下文用量 |
 | `/reasoning` | 选择推理模式（隐藏 / 折叠 / 关闭 / 适应） |
 | `/context [token数]` | 查看或设置上下文压缩阈值（默认弹按钮：100K / 300K / 500K / 1M），也可 `/context 500000` 直接指定 |
-| `/stop` | 中止当前工具调用：`exec` 转入后台继续运行（不杀进程），结果交还模型继续；可用 `operate_task` 查看或终止 |
+| `/stop` | 中止当前工具调用：`exec` 转入后台继续运行（不杀进程），结果交还模型继续；可用 `op_task` 查看或终止 |
 | `/restart` | 重启服务（`systemctl --user restart qfclaw`） |
 
 ## 会话机制
@@ -169,11 +169,12 @@ journalctl --user -u qfclaw -f    # 查看日志
 | 工具 | 说明 |
 | --- | --- |
 | `exec` | 执行 shell 命令。超时（默认 10s）后转入后台，返回任务 ID |
-| `operate_task` | 查看后台任务输出（`check`）或终止任务（`kill`） |
+| `op_task` | 查看后台任务输出（`check`）或终止任务（`kill`） |
 | `operate_file` | 读取（支持 offset/limit）、写入、删除文本文件 |
 | `edit_file` | 精确替换文件中的一段文本，`old_string` 必须唯一 |
 | `send_file` | 发送图片（≤10MB）/ 其他文件（≤50MB） |
 | `subagent` | 把自包含的子任务交给子代理独立完成，返回结论 |
+| `op_subagent` | 管理子代理：`get_msg` 拉最新消息、`kill` 结束运行、`clear` 删除对话文件 |
 | `view_image` | 查看本地或网络图片，图片内容进入上下文 |
 
 工具的输出会被截断到最新 8000 字符，避免占用过多上下文。
@@ -191,13 +192,14 @@ journalctl --user -u qfclaw -f    # 查看日志
 | `id` | 子代理标识，相同 id 复用同一份上下文 |
 | `content` | 要发送的消息，**必须自包含**（子代理看不到主对话） |
 | `get_msg` | `true` 时只返回该子代理最新的一条消息，忽略 `content` |
-| `timeout` | 超时秒数，默认 60 |
+| `timeout` | 前台等待秒数，默认 60；到点后子代理转后台继续运行，不中断 |
 
 - 上下文存 `messages/subagent/<uid>.<topicid>.<子代理id>.json`（私聊 topicid 记为 `0`），结构同会话文件
 - 子代理按会话隔离：不同聊天/话题下的同名 id 互不影响
 - 子代理不向用户发消息，工具进度静默；`send_file` 不可用
 - 子代理内部不能再调用 `subagent`（禁止嵌套）
-- 同一 `id` 串行执行；`/stop` 会中止它正在执行的工具调用
+- 同一 `id` 串行执行；`/stop` 或超时只会让它转入后台继续运行，不会中断任务
+- 转后台后可用 `op_subagent` 的 `get_msg` 取回结果、`kill` 结束运行、`clear` 删除对话文件
 
 ## 图片查看
 

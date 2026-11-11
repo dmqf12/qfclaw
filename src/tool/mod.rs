@@ -180,6 +180,7 @@ impl ToolRegistry {
                 Box::new(task::TaskTool),
                 Box::new(send::SendTool),
                 Box::new(subagent::SubagentTool),
+                Box::new(subagent::OpSubagentTool),
                 Box::new(view_image::ViewImageTool),
             ],
         }
@@ -187,12 +188,12 @@ impl ToolRegistry {
 
     /// 提供给模型的全部工具定义。
     ///
-    /// `include_subagent` 为 false 时不暴露 `subagent`（子代理内部使用）。
+    /// `include_subagent` 为 false 时不暴露 `subagent` / `op_subagent`（子代理内部使用）。
     pub fn definitions(&self, include_subagent: bool) -> Value {
         Value::Array(
             self.tools
                 .iter()
-                .filter(|t| include_subagent || t.name() != "subagent")
+                .filter(|t| include_subagent || !matches!(t.name(), "subagent" | "op_subagent"))
                 .map(|t| t.definition())
                 .collect(),
         )

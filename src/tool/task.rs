@@ -30,14 +30,14 @@ pub struct TaskTool;
 #[async_trait]
 impl Tool for TaskTool {
     fn name(&self) -> &str {
-        "operate_task"
+        "op_task"
     }
 
     fn definition(&self) -> Value {
         json!({
             "type": "function",
             "function": {
-                "name": "operate_task",
+                "name": "op_task",
                 "description": "管理或查看已启动任务的状态。可以获取实时标准输出/错误日志，或者强制终止正在运行的任务。",
                 "parameters": {
                     "type": "object",

@@ -159,8 +159,8 @@ async fn maybe_compact(chat: &str, id: &str) {
     }
 }
 
-/// 最新一条助手消息。
-fn latest(chat: &str, id: &str) -> Option<String> {
+/// 最新一条助手消息（供 `op_subagent` 拉取）。
+pub fn latest(chat: &str, id: &str) -> Option<String> {
     load_messages(chat, id)
         .iter()
         .rev()
@@ -168,6 +168,34 @@ fn latest(chat: &str, id: &str) -> Option<String> {
         .and_then(|m| m["content"].as_str())
         .map(str::to_string)
         .filter(|text| !text.is_empty())
+}
+
+/// 正在运行的子代理（`chat|id` → 中止句柄），供 `op_subagent` 结束运行。
+static RUNNING: Lazy<Mutex<HashMap<String, tokio::task::AbortHandle>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn running_key(chat: &str, id: &str) -> String {
+    format!("{chat}|{}", id.trim())
+}
+
+/// 结束正在运行的子代理，返回是否真的有在运行。
+pub async fn kill(chat: &str, id: &str) -> bool {
+    match RUNNING.lock().await.remove(&running_key(chat, id)) {
+        Some(handle) => {
+            handle.abort();
+            true
+        }
+        None => false,
+    }
+}
+
+/// 删除子代理的对话文件，返回文件是否存在过。
+pub fn remove(chat: &str, id: &str) -> Result<bool> {
+    match fs::remove_file(path(chat, id)) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// 每个子代理一把锁，保证同一 `id` 串行执行。
@@ -267,14 +295,19 @@ pub async fn run(
 
     // 子代理跑在独立任务里：前台只等 timeout 秒或取消信号，超时/`/stop`
     // 都不中断它，而是放手让它继续在后台跑（结果随时可用 `get_msg` 取回）。
+    let key = running_key(chat, id);
+    let done_key = key.clone();
     let mut handle = Box::pin(tokio::spawn(async move {
         let _guard = guard;
         let result = run_loop(&sub_ctx, request, None, &on_save).await;
         if let Ok(LoopResult { usage, .. }) = &result {
             let _ = record_usage(&usage_chat, &usage_id, usage);
         }
+        RUNNING.lock().await.remove(&done_key);
         result
     }));
+    // 登记到运行表，`op_subagent kill` 可随时结束它
+    RUNNING.lock().await.insert(key, handle.abort_handle());
 
     let mut cancelled = false;
     let joined = tokio::select! {

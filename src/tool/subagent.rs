@@ -61,3 +61,79 @@ impl Tool for SubagentTool {
         subagent::run(ctx, id, content, get_msg, timeout).await
     }
 }
+
+/// 子代理管理：结束运行、删除对话文件、拉取最新消息。
+pub struct OpSubagentTool;
+
+#[async_trait]
+impl Tool for OpSubagentTool {
+    fn name(&self) -> &str {
+        "op_subagent"
+    }
+
+    fn definition(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "op_subagent",
+                "description": "管理子代理：kill 结束正在运行的子代理；clear 删除该子代理的对话文件（先结束运行）；get_msg 拉取该子代理最新一条消息。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "子代理 id"
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["get_msg", "kill", "clear"],
+                            "description": "操作类型：get_msg 拉取最新消息；kill 结束运行（保留对话文件）；clear 删除对话文件"
+                        }
+                    },
+                    "required": ["id", "action"]
+                }
+            }
+        })
+    }
+
+    async fn call(&self, args: Value, ctx: &ToolContext) -> String {
+        let id = args["id"].as_str().unwrap_or_default().trim().to_string();
+        let action = args["action"].as_str().unwrap_or("get_msg");
+        if id.is_empty() {
+            return "❌ id 不能为空".to_string();
+        }
+        let chat = ctx.chat_id.as_str();
+
+        match action {
+            "kill" => {
+                notify(ctx, &format!("🛑 结束子代理 {id}")).await;
+                if subagent::kill(chat, &id).await {
+                    format!("🛑 已结束子代理 {id} 的运行（对话文件保留）")
+                } else {
+                    format!("⚠️ 子代理 {id} 当前没有在运行")
+                }
+            }
+            "clear" => {
+                notify(ctx, &format!("🧹 删除子代理 {id} 的对话文件")).await;
+                let killed = subagent::kill(chat, &id).await;
+                // abort 是异步的，稍等一拍再删文件，避免后台任务回写
+                if killed {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+                match subagent::remove(chat, &id) {
+                    Ok(true) => format!(
+                        "🧹 已删除子代理 {id} 的对话文件{}",
+                        if killed { "（并结束了运行）" } else { "" }
+                    ),
+                    Ok(false) => format!("⚠️ 子代理 {id} 没有对话文件"),
+                    Err(e) => format!("❌ 删除失败: {e}"),
+                }
+            }
+            "get_msg" => match subagent::latest(chat, &id) {
+                Some(text) => text,
+                None => format!("子代理 {id} 暂无可返回的消息"),
+            },
+            other => format!("❌ 未知操作: {other}"),
+        }
+    }
+}
