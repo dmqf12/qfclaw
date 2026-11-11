@@ -22,7 +22,6 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use tokio::time::timeout as timeout_at;
 
 use super::agent::{LoopResult, run_loop};
 use super::compact;
@@ -171,17 +170,6 @@ fn latest(chat: &str, id: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-/// 汇总本轮已产生的助手消息（不含工具调用与工具输出）。
-fn round_output(messages: &[Value]) -> String {
-    messages
-        .iter()
-        .filter(|message| message["role"].as_str() == Some("assistant"))
-        .filter_map(|message| message["content"].as_str())
-        .filter(|content| !content.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// 每个子代理一把锁，保证同一 `id` 串行执行。
 static LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -228,9 +216,8 @@ pub async fn run(
     }
 
     let chat = ctx.chat_id.as_str();
-    let lock = lock_for(chat, id).await;
-    let _guard = lock.lock().await;
 
+    // 取回最新消息只读文件，不参与串行锁，任何情况下都能立刻返回
     if get_msg {
         return match latest(chat, id) {
             Some(text) => text,
@@ -243,10 +230,24 @@ pub async fn run(
         return "❌ content 不能为空".to_string();
     }
 
+    let secs = timeout_secs.max(1);
+    let token = ctx.cancel_token().await;
+
+    // 等锁也要受超时/取消约束：同一 id 可能正在后台跑，不能无限等
+    let lock = lock_for(chat, id).await;
+    let guard = tokio::select! {
+        guard = lock.lock_owned() => guard,
+        _ = tokio::time::sleep(Duration::from_secs(secs)) => {
+            return format!("⏱ 子代理 {id} 正在后台运行，等待超过 {secs}s，稍后用 get_msg 取回结果");
+        }
+        _ = token.cancelled() => {
+            return format!("🛑 已停止等待子代理 {id}，它仍在后台运行，稍后用 get_msg 取回结果");
+        }
+    };
+
     maybe_compact(chat, id).await;
 
     let history = load_messages(chat, id);
-    let before = history.len();
     let mut messages = vec![json!({ "role": "system", "content": system_prompt(chat, id) })];
     messages.extend(history);
     messages.push(json!({ "role": "user", "content": content }));
@@ -258,33 +259,64 @@ pub async fn run(
     request.set_tools(registry().definitions(false));
 
     let sub_ctx = ctx.subagent();
-    let (save_chat, save_id) = (chat.to_string(), id.to_string());
-    let on_save = move |messages: &[Value]| save_messages(&save_chat, &save_id, messages);
-    let run = run_loop(&sub_ctx, request, None, &on_save);
+    let (usage_chat, usage_id) = (chat.to_string(), id.to_string());
+    let on_save = {
+        let (save_chat, save_id) = (chat.to_string(), id.to_string());
+        move |messages: &[Value]| save_messages(&save_chat, &save_id, messages)
+    };
 
-    match timeout_at(Duration::from_secs(timeout_secs.max(1)), run).await {
-        Ok(Ok(LoopResult { content, usage })) => {
-            let _ = record_usage(chat, id, &usage);
-            if content.is_empty() {
-                "子代理没有返回内容".to_string()
-            } else {
-                content
-            }
+    // 子代理跑在独立任务里：前台只等 timeout 秒或取消信号，超时/`/stop`
+    // 都不中断它，而是放手让它继续在后台跑（结果随时可用 `get_msg` 取回）。
+    let mut handle = Box::pin(tokio::spawn(async move {
+        let _guard = guard;
+        let result = run_loop(&sub_ctx, request, None, &on_save).await;
+        if let Ok(LoopResult { usage, .. }) = &result {
+            let _ = record_usage(&usage_chat, &usage_id, usage);
         }
-        Ok(Err(e)) => format!("❌ 子代理执行失败: {e}"),
-        Err(_) => {
-            // 超时：中间结果已由 on_save 落盘，优先返回本轮已产生的输出
-            let all = load_messages(chat, id);
-            let this_round = all.get(before.min(all.len())..).unwrap_or_default();
-            let mut output = round_output(this_round);
-            if output.trim().is_empty() {
-                output = latest(chat, id).unwrap_or_default();
-            }
-            if output.trim().is_empty() {
-                format!("⏱ 子代理超时（{timeout_secs}s），尚无输出")
-            } else {
-                format!("⏱ 子代理超时（{timeout_secs}s）\n本轮输出:\n{output}")
-            }
+        result
+    }));
+
+    let mut cancelled = false;
+    let joined = tokio::select! {
+        joined = &mut handle => Some(joined),
+        _ = tokio::time::sleep(Duration::from_secs(secs)) => None,
+        _ = token.cancelled() => {
+            cancelled = true;
+            None
         }
+    };
+
+    if let Some(joined) = joined {
+        return match joined {
+            Ok(Ok(LoopResult { content, .. })) => {
+                if content.is_empty() {
+                    "子代理没有返回内容".to_string()
+                } else {
+                    content
+                }
+            }
+            Ok(Err(e)) => format!("❌ 子代理执行失败: {e}"),
+            Err(e) => format!("❌ 子代理任务异常: {e}"),
+        };
+    }
+
+    // 转后台：drop JoinHandle 只是脱离，不会中止任务
+    drop(handle);
+    log::info(
+        "subagent",
+        format!(
+            "{} 子代理 {id} {}，转入后台继续运行",
+            log::chat(chat),
+            if cancelled {
+                "被 /stop 中止前台等待".to_string()
+            } else {
+                format!("前台等待超过 {secs}s")
+            }
+        ),
+    );
+    if cancelled {
+        format!("🛑 子代理 {id} 已转后台继续运行，稍后用 get_msg 取回结果")
+    } else {
+        format!("⏱ 子代理 {id} 前台等待超过 {secs}s，已转后台继续运行，稍后用 get_msg 取回结果")
     }
 }

@@ -37,7 +37,7 @@ impl Tool for SubagentTool {
                         },
                         "timeout": {
                             "type": "integer",
-                            "description": "超时秒数，默认 60"
+                            "description": "前台等待秒数，默认 60。超时或用户 /stop 都不会中断子代理，它会转后台继续运行，之后用 get_msg 取回结果"
                         }
                     },
                     "required": ["id"]
