@@ -170,23 +170,30 @@ pub fn latest(chat: &str, id: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-/// 正在运行的子代理（`chat|id` → 中止句柄），供 `op_subagent` 结束运行。
-static RUNNING: Lazy<Mutex<HashMap<String, tokio::task::AbortHandle>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+/// 正在运行的子代理：中止句柄 + 退出通知。
+struct Running {
+    abort: tokio::task::AbortHandle,
+    done: Arc<tokio::sync::Notify>,
+}
+
+/// 正在运行的子代理（`chat|id` → 句柄），供 `op_subagent` 结束运行。
+static RUNNING: Lazy<Mutex<HashMap<String, Running>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn running_key(chat: &str, id: &str) -> String {
     format!("{chat}|{}", id.trim())
 }
 
-/// 结束正在运行的子代理，返回是否真的有在运行。
+/// 结束正在运行的子代理并等它真正退出，返回是否真的有在运行。
 pub async fn kill(chat: &str, id: &str) -> bool {
-    match RUNNING.lock().await.remove(&running_key(chat, id)) {
-        Some(handle) => {
-            handle.abort();
-            true
-        }
-        None => false,
-    }
+    let Some(running) = RUNNING.lock().await.remove(&running_key(chat, id)) else {
+        return false;
+    };
+    // 先取等待器再 abort，避免任务结束太快而错过通知
+    let done = running.done.notified();
+    running.abort.abort();
+    // 兜底 5 秒：正常情况 abort 后毫秒级退出
+    let _ = tokio::time::timeout(Duration::from_secs(5), done).await;
+    true
 }
 
 /// 删除子代理的对话文件，返回文件是否存在过。
@@ -297,6 +304,8 @@ pub async fn run(
     // 都不中断它，而是放手让它继续在后台跑（结果随时可用 `get_msg` 取回）。
     let key = running_key(chat, id);
     let done_key = key.clone();
+    let done = Arc::new(tokio::sync::Notify::new());
+    let task_done = done.clone();
     let mut handle = Box::pin(tokio::spawn(async move {
         let _guard = guard;
         let result = run_loop(&sub_ctx, request, None, &on_save).await;
@@ -304,10 +313,17 @@ pub async fn run(
             let _ = record_usage(&usage_chat, &usage_id, usage);
         }
         RUNNING.lock().await.remove(&done_key);
+        task_done.notify_one();
         result
     }));
     // 登记到运行表，`op_subagent kill` 可随时结束它
-    RUNNING.lock().await.insert(key, handle.abort_handle());
+    RUNNING.lock().await.insert(
+        key,
+        Running {
+            abort: handle.abort_handle(),
+            done,
+        },
+    );
 
     let mut cancelled = false;
     let joined = tokio::select! {

@@ -55,7 +55,11 @@ impl Tool for SubagentTool {
         if get_msg {
             notify(ctx, &format!("🤖 取回子代理 {id} 的最新消息")).await;
         } else {
-            notify(ctx, &format!("🤖 子代理 {id}：{content}")).await;
+            notify(
+                ctx,
+                &format!("🤖 子代理 {id}  ⌚️超时：{timeout}s\n{content}"),
+            )
+            .await;
         }
 
         subagent::run(ctx, id, content, get_msg, timeout).await
@@ -115,11 +119,8 @@ impl Tool for OpSubagentTool {
             }
             "clear" => {
                 notify(ctx, &format!("🧹 删除子代理 {id} 的对话文件")).await;
+                // kill 内部会等子代理真正退出，之后删文件才不会被子代理回写
                 let killed = subagent::kill(chat, &id).await;
-                // abort 是异步的，稍等一拍再删文件，避免后台任务回写
-                if killed {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                }
                 match subagent::remove(chat, &id) {
                     Ok(true) => format!(
                         "🧹 已删除子代理 {id} 的对话文件{}",

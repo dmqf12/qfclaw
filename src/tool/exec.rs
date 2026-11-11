@@ -15,6 +15,28 @@ use super::task::{TASKS, TaskHandle};
 use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, truncate};
 use crate::channel::{MsgKind, OutboundMessage};
 
+/// 进程组守卫：工具被中断（子代理被 kill、任务 future 被丢弃）时，
+/// 连同 `bash -c` 里的子进程一起结束，避免 `sleep` 之类变成孤儿进程。
+struct GroupGuard(Option<u32>);
+
+impl GroupGuard {
+    /// 进程已被接管（正常结束或转入后台任务表）时解除守卫。
+    fn release(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            let _ = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("kill -KILL -- -{pid} 2>/dev/null"))
+                .status();
+        }
+    }
+}
+
 pub struct ExecTool;
 
 /// 追加输出，只保留最新的 `MAX_OUTPUT_CHARS` 个字符。
@@ -175,6 +197,9 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         Err(e) => return format!("❌ 启动命令失败: {e}"),
     };
 
+    // 进程组 pid 与 bash 一致（process_group(0) 让它成为组长）
+    let mut group = GroupGuard(child.id());
+
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
@@ -208,6 +233,7 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
 
     match outcome {
         Outcome::Done(wait) => {
+            group.release();
             // 进程退出时管道里可能还有没读完的输出（stderr 尤其明显），
             // 等读取任务读到 EOF 再取结果；最多 2 秒，避免孙进程占着管道不放
             let _ = timeout(Duration::from_secs(2), reader).await;
@@ -223,6 +249,7 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         // 超时与用户中止都保留现场：进程转入后台，由 operate_task 继续管理
         outcome @ (Outcome::Timeout | Outcome::Cancelled) => {
             let pid = child.id();
+            group.release();
             TASKS.lock().await.insert(
                 task_id.clone(),
                 TaskHandle {
