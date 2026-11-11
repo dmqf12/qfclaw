@@ -100,7 +100,27 @@ cargo build --release
 
 产物 `target/release/qfclaw` 放到运行目录（见上方目录结构）后启动即可。
 
-进程的工作目录就是 `workspace/`，配置与会话都按相对路径查找，因此**必须在运行目录下启动**，或用常驻方式（systemd / tmux 等）把工作目录固定下来。`/restart` 指令依赖 `systemctl --user restart qfclaw`，如果不用 systemd 托管，需要自行调整。
+进程的工作目录就是 `workspace/`，配置与会话都按相对路径查找，因此**必须在运行目录下启动**。
+
+### 安装为 systemd 用户服务
+
+在运行目录下执行一次：
+
+```bash
+./qfclaw --systemd
+```
+
+会按当前目录与可执行文件路径生成 `~/.config/systemd/user/qfclaw.service`
+（`Type=simple`，不依赖 tmux），然后 `daemon-reload` + `enable`，生成后立即退出。
+同名旧单元会被先停止、取消自启并删除，再写入新的。
+
+```bash
+systemctl --user start qfclaw     # 启动
+systemctl --user status qfclaw    # 查看状态
+journalctl --user -u qfclaw -f    # 查看日志
+```
+
+`/restart` 指令依赖 `systemctl --user restart qfclaw`，所以建议用它托管。
 
 ## 指令
 

@@ -260,8 +260,12 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 首次运行时按当前目录生成用户级 systemd 服务（已存在则不动）
-    service::ensure();
+    // 安装模式：`qfclaw --systemd` 只按当前目录生成用户级 systemd 服务，
+    // 生成完就退出，不启动对话循环（避免和已在运行的服务抢 Telegram 更新）
+    if std::env::args().any(|arg| arg == "--systemd") {
+        service::ensure();
+        return Ok(());
+    }
 
     // 清理上次运行遗留的临时任务目录
     let _ = std::fs::remove_dir_all("qfclawtask");

@@ -1,8 +1,8 @@
-//! 自动配置用户级 systemd 服务。
+//! 用户级 systemd 服务的自动配置。
 //!
-//! 启动时若 `~/.config/systemd/user/qfclaw.service` 不存在，就按当前运行目录
-//! 生成一个直接运行本程序的服务单元（`Type=simple`，不再依赖 tmux），
-//! 然后执行 `daemon-reload` 与 `enable`。已存在时完全不动，避免覆盖用户的定制。
+//! 执行 `qfclaw --systemd` 时按当前运行目录生成一个直接运行本程序的服务单元
+//! （`Type=simple`，不再依赖 tmux），然后执行 `daemon-reload` 与 `enable`。
+//! 已存在同名单元时视为旧版本：先停掉、取消自启并删除旧单元，再写入新的。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use crate::log;
 /// 服务名（与 unit 文件名一致，`/restart` 也用它）。
 const SERVICE_NAME: &str = "qfclaw.service";
 
-/// 确保用户级服务存在；已存在时什么都不做。
+/// 安装用户级服务：移除同名旧单元后按当前目录重新生成。
 pub fn ensure() {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         log::warn("service", "读不到 HOME，跳过 systemd 服务配置");
@@ -21,13 +21,8 @@ pub fn ensure() {
     };
     let unit = home.join(".config/systemd/user").join(SERVICE_NAME);
     if unit.exists() {
-        log::info(
-            "service",
-            format!("已存在系统服务 {}，保持原样", unit.display()),
-        );
-        return;
+        remove_existing(&unit);
     }
-
     let Ok(dir) = std::env::current_dir() else {
         log::warn("service", "读不到当前目录，跳过 systemd 服务配置");
         return;
@@ -66,6 +61,27 @@ pub fn ensure() {
         ),
     );
     reload_and_enable();
+    log::info(
+        "service",
+        format!("可用 `systemctl --user start {SERVICE_NAME}` 启动，或重新登录后自动启动"),
+    );
+}
+
+/// 移除同名旧单元：停止运行中的服务、取消开机自启、删除单元文件。
+fn remove_existing(unit: &Path) {
+    log::info(
+        "service",
+        format!("发现旧单元 {}，先停止并删除", unit.display()),
+    );
+    run_systemctl(&["--user", "stop", SERVICE_NAME], "stop");
+    run_systemctl(&["--user", "disable", SERVICE_NAME], "disable");
+    match fs::remove_file(unit) {
+        Ok(_) => log::info("service", format!("已删除旧单元 {}", unit.display())),
+        Err(e) => log::warn(
+            "service",
+            format!("删除旧单元 {} 失败：{e}", unit.display()),
+        ),
+    }
 }
 
 /// 生成 unit 内容。
