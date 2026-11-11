@@ -29,8 +29,14 @@ pub const MAX_OUTPUT_CHARS: usize = 8_000;
 /// 折叠提示消息的显示时长（秒）。
 pub const NOTIFY_TTL_SECS: u64 = 15;
 
-/// 回显给用户的工具结果最大字符数。
-const NOTIFY_RESULT_CHARS: usize = 1_200;
+/// 回显给用户的工具结果最大字符数（给模型的完整结果不受此限制）。
+const NOTIFY_RESULT_CHARS: usize = 2_000;
+
+/// 「提示 + 结果」合并后的字符上限。
+///
+/// 折叠消息要按 MarkdownV2 转义（内容会膨胀），而 Telegram 单条上限是
+/// 4096 个 UTF-16 码元，这里留出余量，避免编辑/发送失败。
+const NOTIFY_MERGED_CHARS: usize = 3_000;
 
 /// 工具执行上下文。
 pub struct ToolContext {
@@ -262,7 +268,10 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
 
     // 首选：把结果追加到本次工具的提示消息里（调用内容与结果同一条消息）
     if let Some((id, original)) = ctx.last_notice().await {
-        let merged = format!("{original}\n\n{text}");
+        // 提示本身可能不短（例如写入内容的预览），合并后仍要留足余量
+        let used = original.chars().count() + header.chars().count() + 4;
+        let room = NOTIFY_MERGED_CHARS.saturating_sub(used);
+        let merged = format!("{original}\n\n{header}:\n{}", head(&brief, room));
         let message = OutboundMessage::text(ctx.chat_id.clone(), &merged)
             .kind(MsgKind::Text)
             .fold();
@@ -286,6 +295,15 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
                 .ttl(NOTIFY_TTL_SECS),
         )
         .await;
+}
+
+/// 取文本开头 `max` 个字符，超出部分用省略号代替。
+fn head(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max).collect();
+    format!("{head}…")
 }
 
 /// 截断过长文本（保留最新部分）。
