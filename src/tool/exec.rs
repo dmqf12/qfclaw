@@ -137,8 +137,8 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
 
     // 执行提示（命令结束后删除；子代理上下文不发）
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
-    if !ctx.silent {
-        let _ = ctx
+    if !ctx.silent
+        && let Ok(id) = ctx
             .channel
             .send(
                 OutboundMessage::text(ctx.chat_id.clone(), &start_msg)
@@ -146,7 +146,9 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
                     .fold()
                     .ttl(NOTIFY_TTL_SECS),
             )
-            .await;
+            .await
+    {
+        ctx.remember_notice(id).await;
     }
 
     // 准备脚本：激活虚拟环境后再执行命令

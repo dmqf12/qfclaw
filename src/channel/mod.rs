@@ -84,6 +84,8 @@ pub struct OutboundMessage {
     pub fold: bool,
     /// 存活秒数，到期后自动删除；`None` 表示保留。
     pub ttl: Option<u64>,
+    /// 要回复（挂载）的消息 ID；`None` 表示普通消息。
+    pub reply_to: Option<MsgId>,
 }
 
 impl OutboundMessage {
@@ -96,7 +98,14 @@ impl OutboundMessage {
             buttons: Vec::new(),
             fold: false,
             ttl: None,
+            reply_to: None,
         }
+    }
+
+    /// 以回复形式挂到某条消息下面。
+    pub fn reply_to(mut self, msg_id: impl Into<MsgId>) -> Self {
+        self.reply_to = Some(msg_id.into());
+        self
     }
 
     /// 设置消息用途。

@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::channel::{Channel, MsgKind, OutboundMessage};
+use crate::channel::{Channel, MsgId, MsgKind, OutboundMessage};
 use crate::log;
 
 /// 单次工具输出的字符上限。
@@ -46,6 +46,9 @@ pub struct ToolContext {
     images: Arc<Mutex<Vec<String>>>,
     /// 正在执行的工具数量（用于判断 /stop 是否有东西可停）。
     active: Arc<AtomicUsize>,
+    /// 最近一条工具提示消息的 ID：工具结果会以回复形式挂在它下面。
+    /// 每个工具用各自的 [`ToolContext::child`]，互不干扰。
+    notice: Arc<Mutex<Option<MsgId>>>,
 }
 
 impl ToolContext {
@@ -63,6 +66,7 @@ impl ToolContext {
             depth: 0,
             images: Arc::new(Mutex::new(Vec::new())),
             active,
+            notice: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -81,6 +85,7 @@ impl ToolContext {
             depth: self.depth,
             images: self.images.clone(),
             active: self.active.clone(),
+            notice: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -94,6 +99,7 @@ impl ToolContext {
             depth: self.depth + 1,
             images: Arc::new(Mutex::new(Vec::new())),
             active: self.active.clone(),
+            notice: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -105,6 +111,16 @@ impl ToolContext {
     /// 标记一个工具执行结束。
     fn exit_tool(&self) {
         self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// 记住最近一条提示消息，工具结果会回复到它下面。
+    async fn remember_notice(&self, id: MsgId) {
+        *self.notice.lock().await = Some(id);
+    }
+
+    /// 最近一条提示消息的 ID（还没有则为 `None`）。
+    async fn last_notice(&self) -> Option<MsgId> {
+        self.notice.lock().await.clone()
     }
 
     /// 记录一张待注入上下文的图片。
@@ -213,7 +229,7 @@ pub async fn notify(ctx: &ToolContext, msg: &str) {
     if ctx.silent {
         return;
     }
-    let _ = ctx
+    if let Ok(id) = ctx
         .channel
         .send(
             OutboundMessage::text(ctx.chat_id.clone(), msg)
@@ -221,7 +237,10 @@ pub async fn notify(ctx: &ToolContext, msg: &str) {
                 .fold()
                 .ttl(NOTIFY_TTL_SECS),
         )
-        .await;
+        .await
+    {
+        ctx.remember_notice(id).await;
+    }
 }
 
 /// 回显工具执行结果（折叠、自动删除；子代理上下文静默）。
@@ -236,15 +255,15 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
     } else {
         format!("📤 {name} 结果:\n{brief}")
     };
-    let _ = ctx
-        .channel
-        .send(
-            OutboundMessage::text(ctx.chat_id.clone(), &text)
-                .kind(MsgKind::Text)
-                .fold()
-                .ttl(NOTIFY_TTL_SECS),
-        )
-        .await;
+    let mut message = OutboundMessage::text(ctx.chat_id.clone(), &text)
+        .kind(MsgKind::Text)
+        .fold()
+        .ttl(NOTIFY_TTL_SECS);
+    // 挂在本次工具的提示消息下面，方便对照是哪次调用的结果
+    if let Some(notice) = ctx.last_notice().await {
+        message = message.reply_to(notice);
+    }
+    let _ = ctx.channel.send(message).await;
 }
 
 /// 截断过长文本（保留最新部分）。

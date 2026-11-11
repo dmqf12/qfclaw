@@ -268,6 +268,16 @@ impl TelegramChannel {
         } else if msg.kind == MsgKind::Text {
             body["parse_mode"] = json!("Markdown");
         }
+        // 回复挂载：原消息可能已被删除（临时提示会过期），允许照常发送；
+        // ID 解析失败时退化成普通消息，不因一条提示影响结果回传
+        if let Some(reply_to) = &msg.reply_to
+            && let Ok(message_id) = reply_to.parse::<i64>()
+        {
+            body["reply_parameters"] = json!({
+                "message_id": message_id,
+                "allow_sending_without_reply": true,
+            });
+        }
         if with_buttons && !msg.buttons.is_empty() {
             body["reply_markup"] = json!({ "inline_keyboard": buttons_json(&msg.buttons) });
         }
