@@ -55,8 +55,7 @@ impl Tool for SubagentTool {
         if get_msg {
             notify(ctx, &format!("🤖 取回子代理 {id} 的最新消息")).await;
         } else {
-            let brief: String = content.chars().take(40).collect();
-            notify(ctx, &format!("🤖 子代理 {id}：{brief}")).await;
+            notify(ctx, &format!("🤖 子代理 {id}：{content}")).await;
         }
 
         subagent::run(ctx, id, content, get_msg, timeout).await

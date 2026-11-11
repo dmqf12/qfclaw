@@ -29,7 +29,7 @@ use super::compact;
 use super::llm::{ChatRequest, build_base_prompt};
 use crate::config::ModelConfig;
 use crate::log;
-use crate::tool::{MAX_OUTPUT_CHARS, ToolContext, registry, truncate};
+use crate::tool::{ToolContext, registry};
 
 const DIR: &str = "../messages/subagent";
 
@@ -233,7 +233,7 @@ pub async fn run(
 
     if get_msg {
         return match latest(chat, id) {
-            Some(text) => truncate(&text, MAX_OUTPUT_CHARS),
+            Some(text) => text,
             None => "子代理暂无可返回的消息".to_string(),
         };
     }
@@ -268,7 +268,7 @@ pub async fn run(
             if content.is_empty() {
                 "子代理没有返回内容".to_string()
             } else {
-                truncate(&content, MAX_OUTPUT_CHARS)
+                content
             }
         }
         Ok(Err(e)) => format!("❌ 子代理执行失败: {e}"),
@@ -280,7 +280,6 @@ pub async fn run(
             if output.trim().is_empty() {
                 output = latest(chat, id).unwrap_or_default();
             }
-            let output = truncate(&output, 4000);
             if output.trim().is_empty() {
                 format!("⏱ 子代理超时（{timeout_secs}s），尚无输出")
             } else {
