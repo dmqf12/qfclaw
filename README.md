@@ -27,6 +27,7 @@
 │   ├── models.json        # 模型配置
 │   ├── Agent.md           # 人设：行为准则
 │   ├── User.md            # 人设：用户信息
+│   ├── extra.md           # 人设：额外补充提示词（可留空）
 │   └── telegram/
 │       └── file_id.json   # 发送文件的 file_id 缓存（自动生成）
 ├── messages/              # 会话文件，一个对话一个文件
@@ -90,7 +91,7 @@ Bot 菜单里的指令不通过配置文件下发，硬编码在 `src/channel/te
 
 ### 人设文件
 
-`config/Agent.md`、`User.md` 会按顺序拼接成 system prompt，修改后下一次请求生效（无需重启）。
+`config/Agent.md`、`User.md`、`extra.md` 会按顺序拼接成 system prompt，修改后下一次请求生效（无需重启）。
 
 ## 构建与部署
 

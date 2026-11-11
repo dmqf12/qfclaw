@@ -143,7 +143,7 @@ pub fn usage_brief(usage: &Value) -> String {
 
 /// 基础 system 提示（Agent / User）。
 pub fn build_base_prompt() -> String {
-    let files = ["../config/Agent.md", "../config/User.md"];
+    let files = ["../config/Agent.md", "../config/User.md", "../config/extra.md"];
     files
         .iter()
         .filter_map(|f| fs::read_to_string(f).ok())
