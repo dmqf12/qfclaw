@@ -65,6 +65,15 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
 
     // 压缩上下文：把历史总结进 memory，messages 只留最后一条用户消息
     if cmd_text == "/compact" {
+        // 刚压缩过（只剩一条用户消息且用量已清零）时不必再调模型
+        if session::status(chat_id).1 == 0 && session::load_history(chat_id)?.len() <= 1 {
+            log::info(
+                "cmd",
+                format!("{} 上下文已是最小，跳过压缩", log::chat(chat_id)),
+            );
+            reply(&channel, chat_id, "🗜 当前上下文已是最小，无需压缩").await?;
+            return Ok(());
+        }
         // 压缩要先调用一次模型，耗时可能几十秒，先回执避免用户以为没反应
         let notice = reply(&channel, chat_id, "🗜 正在压缩上下文…").await.ok();
         let result = compact::compact(chat_id).await;
