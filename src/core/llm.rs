@@ -1,7 +1,7 @@
 //! 模型（LLM）客户端。
 
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 
 use crate::config::ModelConfig;
 use crate::core::session;
-use crate::log;
 use crate::tool::registry;
 
 /// 单次回复的最大 token 数。
@@ -47,6 +46,11 @@ impl ChatRequest {
         messages.push(json!({ "role": "user", "content": user_input }));
 
         Self::build(messages)
+    }
+
+    /// 当前使用的模型名。
+    pub fn model(&self) -> &str {
+        &self.model
     }
 
     /// 构造不带工具的压缩请求。
@@ -105,63 +109,36 @@ impl ChatRequest {
             .build()
             .unwrap_or_else(|_| Client::new());
         let url = format!("{}/chat/completions", self.base_url);
-        log::info(
-            "llm",
-            format!(
-                "请求 {}：{} 条消息，{} 个工具，tool_choice={}，max_tokens={}",
-                self.model,
-                self.messages.len(),
-                self.tools.as_array().map(Vec::len).unwrap_or(0),
-                self.tool_choice,
-                self.max_tokens
-            ),
-        );
-        let started = Instant::now();
         let response = client
             .post(url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&payload)
             .send()
-            .await
-            .inspect_err(|e| {
-                log::error(
-                    "llm",
-                    format!(
-                        "请求发送失败（耗时 {:.1}s）：{e}",
-                        started.elapsed().as_secs_f64()
-                    ),
-                )
-            })?;
+            .await?;
 
-        let status = response.status();
-        if !status.is_success() {
+        if !response.status().is_success() {
+            let status = response.status();
             let error_json: Value = response.json().await.context("请求失败")?;
             let message = error_json["error"]["message"]
                 .as_str()
                 .unwrap_or("请求失败");
-            log::error(
-                "llm",
-                format!(
-                    "HTTP {status}（耗时 {:.1}s）：{message}",
-                    started.elapsed().as_secs_f64()
-                ),
-            );
-            return Err(anyhow!("API 请求失败: {}", message));
+            return Err(anyhow!("API 请求失败（HTTP {status}）: {message}"));
         }
 
-        let reply: Value = response.json().await?;
-        log::info(
-            "llm",
-            format!(
-                "响应 {status}：耗时 {:.1}s，完成原因 {}，usage {}",
-                started.elapsed().as_secs_f64(),
-                reply["choices"][0]["finish_reason"].as_str().unwrap_or("-"),
-                reply["usage"]["total_tokens"].as_u64().unwrap_or(0)
-            ),
-        );
-        Ok(reply)
+        Ok(response.json().await?)
     }
+}
+
+/// usage 摘要（日志用）：`prompt/completion/total`。
+pub fn usage_brief(usage: &Value) -> String {
+    let field = |key: &str| usage[key].as_u64().unwrap_or(0);
+    format!(
+        "{}/{}/{}",
+        field("prompt_tokens"),
+        field("completion_tokens"),
+        field("total_tokens")
+    )
 }
 
 /// 基础 system 提示（SOUL / Agent / User）。

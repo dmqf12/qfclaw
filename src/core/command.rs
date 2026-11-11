@@ -32,7 +32,10 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
         match channel.create_topic(chat_id, title).await {
             Ok(new_chat) => {
                 session::set_title(&new_chat, title)?;
-                log::info("cmd", format!("{chat_id} 新建话题 {new_chat}「{title}」"));
+                log::info(
+                    "cmd",
+                    format!("{} 新建话题 {new_chat}「{title}」", log::chat(chat_id)),
+                );
                 channel
                     .send(OutboundMessage::text(new_chat, "✅ 新对话已开始"))
                     .await?;
@@ -40,7 +43,7 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
             Err(e) => {
                 log::warn(
                     "cmd",
-                    format!("{chat_id} 建话题失败，改为重置当前对话：{e}"),
+                    format!("{} 建话题失败，改为重置当前对话：{e}", log::chat(chat_id)),
                 );
                 session::reset(chat_id)?;
                 reply(&channel, chat_id, "✅ 新对话已开始").await?;
@@ -52,7 +55,7 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
     // 删除当前对话：消息文件移到 messages/clear/，话题一并删除
     if cmd_text == "/clear" {
         session::clear(chat_id)?;
-        log::info("cmd", format!("{chat_id} 对话已归档到 messages/clear"));
+        log::info("cmd", format!("{} 对话已归档", log::chat(chat_id)));
         // 话题删除后无法再发消息，只有删除失败时才回执
         if channel.delete_topic(chat_id).await.is_err() {
             reply(&channel, chat_id, "🧹 当前对话已清除").await?;
@@ -76,13 +79,13 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
             report.memory_chars,
             report.before_tokens as f64 / 1000.0
         );
-        log::info("cmd", format!("{chat_id} 手动压缩：{text}"));
+        log::info("cmd", format!("{} 手动压缩", log::chat(chat_id)));
         reply(&channel, chat_id, &text).await?;
         return Ok(());
     }
 
     if cmd_text == "/restart" {
-        log::info("cmd", format!("{chat_id} 请求重启服务"));
+        log::info("cmd", format!("{} 请求重启服务", log::chat(chat_id)));
         let _ = channel
             .send(OutboundMessage::text(chat_id.to_string(), "🔄重启中").ttl(3))
             .await;
@@ -123,7 +126,7 @@ pub async fn exec_cmd(channel: Arc<dyn Channel>, chat_id: &str, cmd_text: &str) 
                 human_tokens(used)
             ),
         };
-        log::info("cmd", format!("{chat_id} /status：{used} tokens"));
+        log::info("cmd", format!("{} /status {used}", log::chat(chat_id)));
         reply(&channel, chat_id, &text).await?;
         return Ok(());
     }

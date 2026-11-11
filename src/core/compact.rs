@@ -43,10 +43,11 @@ pub async fn compact(chat: &str) -> Result<Report> {
     let memory = session::memory(chat);
     let messages = session::load_history(chat)?;
     let before_tokens = session::status(chat).1;
+    let key = log::chat(chat);
     log::info(
         "compact",
         format!(
-            "{chat} 开始压缩：{} 条消息，记忆 {} 字，上次用量 {} tokens",
+            "{key} 开始压缩 {}条 记忆{}字 用量{}",
             messages.len(),
             memory.chars().count(),
             before_tokens
@@ -61,7 +62,7 @@ pub async fn compact(chat: &str) -> Result<Report> {
     log::info(
         "compact",
         format!(
-            "{chat} 压缩完成：{} 条 -> {} 条，记忆 {} 字，耗时 {:.1}s",
+            "{key} 压缩完成 {}条→{}条 记忆{}字 {:.1}s",
             messages.len(),
             keep.len(),
             summary.chars().count(),

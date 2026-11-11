@@ -169,12 +169,12 @@ impl ToolRegistry {
         if ctx.depth > 0 && name == "subagent" {
             return "❌ 子代理不能再创建子代理".to_string();
         }
+        let chat = log::chat(&ctx.chat_id);
         log::info(
             "tool",
             format!(
-                "{} 调用 {name}：{}",
-                ctx.chat_id,
-                log::preview(&args.to_string(), 200)
+                "{chat} 调用 {name} {}",
+                log::preview(&args.to_string(), 120)
             ),
         );
         let started = Instant::now();
@@ -190,8 +190,7 @@ impl ToolRegistry {
         log::info(
             "tool",
             format!(
-                "{} {name} 完成：耗时 {:.2}s，结果 {} 字",
-                ctx.chat_id,
+                "{chat} {name} {:.2}s {}字",
                 started.elapsed().as_secs_f64(),
                 result.chars().count()
             ),
@@ -210,7 +209,7 @@ pub fn registry() -> &'static ToolRegistry {
 
 /// 发送一条进度提示（短暂展示后自动删除；子代理上下文静默）。
 pub async fn notify(ctx: &ToolContext, msg: &str) {
-    log::info("tool", format!("{} {msg}", ctx.chat_id));
+    log::info("tool", format!("{} {msg}", log::chat(&ctx.chat_id)));
     if ctx.silent {
         return;
     }

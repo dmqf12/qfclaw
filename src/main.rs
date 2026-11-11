@@ -12,7 +12,6 @@ pub static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 use channel::{Channel, InboundMessage, MsgKind, OutboundMessage, telegram};
 use core::{agent, command, session};
@@ -60,8 +59,7 @@ fn spawn_task(channel: Arc<dyn Channel>, chat_id: String, content: String) -> Ru
     let task_cancel = cancel.clone();
     let task_active = active.clone();
     let handle = tokio::spawn(async move {
-        let started = Instant::now();
-        match agent::main(
+        if let Err(e) = agent::main(
             task_channel.clone(),
             task_chat_id.clone(),
             &content,
@@ -71,23 +69,16 @@ fn spawn_task(channel: Arc<dyn Channel>, chat_id: String, content: String) -> Ru
         )
         .await
         {
-            Ok(_) => log::info(
+            log::error(
                 "agent",
-                format!(
-                    "{} 对话结束，耗时 {:.1}s",
-                    task_chat_id,
-                    started.elapsed().as_secs_f64()
-                ),
-            ),
-            Err(e) => {
-                log::error("agent", format!("{} 对话失败：{e}", task_chat_id));
-                let _ = task_channel
-                    .send(
-                        OutboundMessage::text(task_chat_id, &format!("对话失败: {e}"))
-                            .kind(MsgKind::Error),
-                    )
-                    .await;
-            }
+                format!("{} 任务失败：{e}", log::chat(&task_chat_id)),
+            );
+            let _ = task_channel
+                .send(
+                    OutboundMessage::text(task_chat_id, &format!("对话失败: {e}"))
+                        .kind(MsgKind::Error),
+                )
+                .await;
         }
     });
 
@@ -110,25 +101,19 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
 
     while let Some(msg) = rx.recv().await {
         let chat_id = msg.chat_id.clone();
+        let chat = log::chat(&chat_id);
         let what = match &msg.callback {
-            Some(callback) => format!("按钮回调 {}", callback.data),
-            None => format!("内容 {}", log::preview(&msg.content, 80)),
+            Some(callback) => format!("⚙ {}", callback.data),
+            None => format!("↓ {}", log::preview(&msg.content, 80)),
         };
-        log::info(
-            "tg",
-            format!("收到消息 chat={} user={} {what}", chat_id, msg.user_id),
-        );
+        log::info("tg", format!("{chat} {what}"));
 
         // 白名单校验（服务消息、回调不回复，避免刷屏）
         if !channel.is_allowed(&msg.user_id) {
             if msg.content.is_empty() {
-                log::warn("tg", format!("丢弃白名单外用户 {} 的空消息", msg.user_id));
                 continue;
             }
-            log::warn(
-                "tg",
-                format!("用户 {} 不在白名单，已拒绝（chat={chat_id}）", msg.user_id),
-            );
+            log::warn("tg", format!("{chat} 白名单外用户 {} 被拒绝", msg.user_id));
             let _ = channel
                 .send(
                     OutboundMessage::text(
@@ -163,7 +148,7 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
         // 中止当前正在前台执行的工具调用；后台任务与对话本身不受影响
         if msg.content == "/stop" {
             let reply = stop_tools(&tasks, &chat_id).await;
-            log::info("cmd", format!("{chat_id} /stop：{reply}"));
+            log::info("cmd", format!("{chat} /stop {reply}"));
             let _ = channel.send(OutboundMessage::text(chat_id, reply)).await;
             continue;
         }
@@ -174,7 +159,7 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
                 .get(&chat_id)
                 .is_some_and(|task| !task.handle.is_finished())
         {
-            log::warn("cmd", format!("{chat_id} 对话仍在输出，丢弃 /compact"));
+            log::warn("cmd", format!("{chat} 对话仍在输出，丢弃 /compact"));
             let _ = channel
                 .send(OutboundMessage::text(
                     chat_id,
@@ -190,7 +175,7 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
             || ((msg.content == "/new" || msg.content.starts_with("/new "))
                 && !chat_id.contains(':'));
         if reset_current && let Some(task) = tasks.remove(&chat_id) {
-            log::info("cmd", format!("{chat_id} 重置对话前中止运行中的任务"));
+            log::info("cmd", format!("{chat} 重置对话，先中止运行中的任务"));
             task.cancel.lock().await.cancel();
             task.handle.abort();
         }
@@ -208,13 +193,13 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
         .iter()
         .any(|cmd| msg.content.starts_with(cmd))
         {
-            log::info("cmd", format!("{chat_id} 执行指令 {}", msg.content));
+            log::info("cmd", format!("{chat} {}", msg.content));
             let channel = channel.clone();
             let chat_id = chat_id.clone();
             let cmd = msg.content.clone();
             tokio::spawn(async move {
                 if let Err(e) = command::exec_cmd(channel.clone(), &chat_id, &cmd).await {
-                    log::error("cmd", format!("{chat_id} 指令 {cmd} 失败：{e}"));
+                    log::error("cmd", format!("{chat} 指令 {cmd} 失败：{e}"));
                     let _ = channel
                         .send(
                             OutboundMessage::text(chat_id, &format!("指令执行失败: {e}"))
@@ -238,10 +223,7 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
         if let Some(task) = tasks.get(&chat_id) {
             log::info(
                 "agent",
-                format!(
-                    "{chat_id} 任务运行中，注入新消息：{}",
-                    log::preview(&content, 80)
-                ),
+                format!("{chat} 追加 {}", log::preview(&content, 80)),
             );
             let _ = task.input.send(content).await;
             continue;
@@ -249,7 +231,7 @@ async fn handle_msg(channel: Arc<dyn Channel>, mut rx: mpsc::Receiver<InboundMes
 
         log::info(
             "agent",
-            format!("{chat_id} 启动任务：{}", log::preview(&content, 80)),
+            format!("{chat} 开始 {}", log::preview(&content, 80)),
         );
         tasks.insert(
             chat_id.clone(),

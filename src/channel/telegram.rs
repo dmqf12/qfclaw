@@ -199,10 +199,7 @@ impl TelegramChannel {
         if let Some(file_id) = cached_file_id(path, &hash).await {
             log::info(
                 "tg",
-                format!(
-                    "发送文件 {path}（{} 字节，{method}，命中 file_id 缓存）",
-                    size
-                ),
+                format!("{} ↑ 文件 {path} {size}B {method} 缓存", log::chat(key)),
             );
             let mut body = serde_json::Map::new();
             body.insert("chat_id".into(), json!(chat_id));
@@ -220,7 +217,7 @@ impl TelegramChannel {
             .unwrap_or_else(|| "file".to_string());
         log::info(
             "tg",
-            format!("发送文件 {path}（{size} 字节，{method}，需上传）"),
+            format!("{} ↑ 文件 {path} {size}B {method} 上传", log::chat(key)),
         );
         let mut form = reqwest::multipart::Form::new()
             .text("chat_id", chat_id.to_string())
@@ -341,12 +338,6 @@ impl Channel for TelegramChannel {
                 Ok(resp) => match resp.json::<Value>().await {
                     Ok(json) => {
                         if let Some(results) = json["result"].as_array() {
-                            if !results.is_empty() {
-                                log::info(
-                                    "tg",
-                                    format!("拉取到 {} 条更新（offset={offset}）", results.len()),
-                                );
-                            }
                             for update in results {
                                 if let Some(id) = update["update_id"].as_i64() {
                                     offset = id + 1;
@@ -387,17 +378,18 @@ impl Channel for TelegramChannel {
         };
         let mut parts = split_message(&msg.content, max);
         let last = parts.pop().ok_or_else(|| anyhow!("不能发送空消息"))?;
-        log::info(
-            "tg",
-            format!(
-                "发送 chat={} {:?}：{} 字，{} 段{}",
-                msg.chat_id,
-                msg.kind,
-                msg.content.chars().count(),
-                parts.len() + 1,
-                if msg.fold { "，折叠" } else { "" }
-            ),
+        let mut brief = format!(
+            "{} ↑ {}字",
+            log::chat(&msg.chat_id),
+            msg.content.chars().count()
         );
+        if !parts.is_empty() {
+            brief.push_str(&format!(" {}段", parts.len() + 1));
+        }
+        if msg.fold {
+            brief.push_str(" 折叠");
+        }
+        log::info("tg", brief);
         for part in &parts {
             self.send_text(&msg, part, false).await?;
         }

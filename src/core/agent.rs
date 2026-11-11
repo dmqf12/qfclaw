@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::channel::*;
 use crate::config::ModelConfig;
 use crate::core::compact;
-use crate::core::llm::ChatRequest;
+use crate::core::llm::{ChatRequest, usage_brief};
 use crate::core::session;
 use crate::log;
 use crate::tool::{ToolContext, registry};
@@ -44,17 +44,6 @@ fn extract_chat_result(chat_result: &Value) -> (String, String, Value) {
         .cloned()
         .unwrap_or_else(|| json!([]));
     (content.to_string(), reasoning.to_string(), tool_calls)
-}
-
-/// usage 摘要（日志用）：`prompt / completion / total tokens`。
-fn usage_brief(usage: &Value) -> String {
-    let field = |key: &str| usage[key].as_u64().unwrap_or(0);
-    format!(
-        "tokens {}/{}/{}",
-        field("prompt_tokens"),
-        field("completion_tokens"),
-        field("total_tokens")
-    )
 }
 
 /// 并发执行一轮工具调用，返回按原始顺序排列的 tool 消息。
@@ -143,6 +132,10 @@ pub async fn run_loop(
     let mut contents: Vec<String> = Vec::new();
     let mut last_usage = json!({});
     let mut round: usize = 0;
+    let loop_started = Instant::now();
+    // 日志用的短标签：子代理静默执行，单独一个标签便于区分
+    let tag = if ctx.silent { "subagent" } else { "agent" };
+    let chat = log::chat(&ctx.chat_id);
 
     loop {
         round += 1;
@@ -156,13 +149,12 @@ pub async fn run_loop(
                 .await?;
         }
 
-        let tag = if ctx.silent { "subagent" } else { "agent" };
         log::info(
             tag,
             format!(
-                "{} 第 {round} 轮请求：{} 条消息",
-                ctx.chat_id,
-                request.messages.len()
+                "{chat} 第{round}轮 {}条 → {}",
+                request.messages.len(),
+                request.model()
             ),
         );
         let started = Instant::now();
@@ -172,8 +164,7 @@ pub async fn run_loop(
                 log::error(
                     tag,
                     format!(
-                        "{} 第 {round} 轮请求失败（耗时 {:.1}s）：{e}",
-                        ctx.chat_id,
+                        "{chat} 第{round}轮请求失败 {:.1}s：{e}",
                         started.elapsed().as_secs_f64()
                     ),
                 );
@@ -195,13 +186,12 @@ pub async fn run_loop(
         log::info(
             tag,
             format!(
-                "{} 第 {round} 轮响应：耗时 {:.1}s，{}，正文 {} 字，推理 {} 字，工具调用 {} 个",
-                ctx.chat_id,
+                "{chat} 第{round}轮 {:.1}s {}字 推理{}字 工具{}个 {}",
                 started.elapsed().as_secs_f64(),
-                usage_brief(&last_usage),
                 content.chars().count(),
                 reasoning.chars().count(),
-                tool_calls.as_array().map(Vec::len).unwrap_or(0)
+                tool_calls.as_array().map(Vec::len).unwrap_or(0),
+                usage_brief(&last_usage)
             ),
         );
 
@@ -228,11 +218,7 @@ pub async fn run_loop(
             messages.push(json!({ "role": "user", "content": new_msg }));
             log::info(
                 "agent",
-                format!(
-                    "{} 打断上一轮，追加新消息：{}",
-                    ctx.chat_id,
-                    log::preview(&new_msg, 80)
-                ),
+                format!("{chat} 追加 {}", log::preview(&new_msg, 80)),
             );
             request.messages = messages.clone();
             on_save(&messages)?;
@@ -280,10 +266,8 @@ pub async fn run_loop(
     log::info(
         "agent",
         format!(
-            "{} 对话完成：{round} 轮，正文 {} 字，{}",
-            ctx.chat_id,
-            contents.iter().map(|c| c.chars().count()).sum::<usize>(),
-            usage_brief(&last_usage)
+            "{chat} 完成 {round}轮 {:.1}s",
+            loop_started.elapsed().as_secs_f64()
         ),
     );
     Ok(LoopResult {
@@ -308,7 +292,8 @@ pub async fn main(
         log::info(
             "compact",
             format!(
-                "{chat_id} 上次用量 {} tokens 超过阈值 {}，自动压缩",
+                "{} 用量 {} 超过阈值 {}，自动压缩",
+                log::chat(&chat_id),
                 session::status(&chat_id).1,
                 cfg.context_window
             ),
