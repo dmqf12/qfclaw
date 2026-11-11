@@ -352,13 +352,21 @@ impl TelegramChannel {
         let url = format!("{}{}/deleteMessage", self.base_url, self.token);
         let chat_id = split_chat(key).0.to_string();
         let msg_id = msg_id.to_string();
+        // 分段消息要把前面的分段一起删，否则会残留
+        let parts_key = format!("{key}|{msg_id}");
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(secs)).await;
-            let _ = client
-                .post(url)
-                .json(&json!({ "chat_id": chat_id, "message_id": msg_id }))
-                .send()
-                .await;
+            let ids = match PARTS.lock().await.remove(&parts_key) {
+                Some(ids) => ids,
+                None => vec![msg_id],
+            };
+            for id in ids {
+                let _ = client
+                    .post(&url)
+                    .json(&json!({ "chat_id": chat_id, "message_id": id }))
+                    .send()
+                    .await;
+            }
         });
     }
 }
@@ -470,10 +478,21 @@ impl Channel for TelegramChannel {
             brief.push_str(" 折叠");
         }
         log::info("tg", brief);
+        let mut ids = Vec::with_capacity(parts.len() + 1);
         for part in &parts {
-            self.send_text(&msg, part, false).await?;
+            ids.push(self.send_text(&msg, part, false).await?);
         }
-        self.send_text(&msg, &last, true).await
+        ids.push(self.send_text(&msg, &last, true).await?);
+        let last_id = ids.last().cloned().unwrap_or_default();
+        if ids.len() > 1 {
+            let mut parts_map = PARTS.lock().await;
+            // 只增不减的表：粗略设个上限，避免长期运行后无限增长
+            if parts_map.len() >= 512 {
+                parts_map.clear();
+            }
+            parts_map.insert(format!("{}|{last_id}", msg.chat_id), ids);
+        }
+        Ok(last_id)
     }
 
     async fn delete(&self, chat_id: &str, id: &str) -> Result<()> {
@@ -557,6 +576,13 @@ const FILE_ID_PATH: &str = "../config/telegram/file_id.json";
 
 /// 串行化 file_id 缓存的读改写，避免并发发送时互相覆盖。
 static FILE_ID_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// 分段消息的分段 ID 表：`会话键|最后一段的 id` → 全部分段 id。
+///
+/// 一条超长消息会被拆成多条发送，`send` 只返回最后一条的 id；
+/// 删除时按这张表把前面的分段一起删掉，否则会残留。
+static PARTS: Lazy<tokio::sync::Mutex<std::collections::HashMap<String, Vec<MsgId>>>> =
+    Lazy::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// 解析白名单配置：支持 `[123, 456]` 数组，也兼容旧的单个数字/字符串写法。
 ///
