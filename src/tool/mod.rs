@@ -29,6 +29,17 @@ pub const MAX_OUTPUT_CHARS: usize = 8_000;
 /// 折叠提示消息的显示时长（秒）。
 pub const NOTIFY_TTL_SECS: u64 = 15;
 
+/// 短时效工具（看图、发文件）结果的显示时长（秒），比默认更短。
+const SHORT_TTL_SECS: u64 = 3;
+
+/// 按工具名取结果显示时长。
+fn notify_ttl(name: &str) -> u64 {
+    match name {
+        "view_image" | "send_file" => SHORT_TTL_SECS,
+        _ => NOTIFY_TTL_SECS,
+    }
+}
+
 /// 回显给用户的工具结果最大字符数（给模型的完整结果不受此限制）。
 const NOTIFY_RESULT_CHARS: usize = 2_000;
 
@@ -276,10 +287,10 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
             .kind(MsgKind::Text)
             .fold();
         if ctx.channel.edit(&message, &id).await.is_ok() {
-            // 结果展示 NOTIFY_TTL_SECS 秒后删除
+            // 结果展示 notify_ttl(name) 秒后删除
             let _ = ctx
                 .channel
-                .delete_later(&ctx.chat_id, &id, NOTIFY_TTL_SECS)
+                .delete_later(&ctx.chat_id, &id, notify_ttl(name))
                 .await;
             return;
         }
@@ -292,7 +303,7 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
             OutboundMessage::text(ctx.chat_id.clone(), &text)
                 .kind(MsgKind::Text)
                 .fold()
-                .ttl(NOTIFY_TTL_SECS),
+                .ttl(notify_ttl(name)),
         )
         .await;
 }
