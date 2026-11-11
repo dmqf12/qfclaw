@@ -17,6 +17,77 @@ use crate::channel::{MsgKind, OutboundMessage};
 
 pub struct ExecTool;
 
+/// 追加输出，只保留最新的 `MAX_OUTPUT_CHARS` 个字符。
+async fn push_output(target: &Arc<Mutex<String>>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let mut lock = target.lock().await;
+    lock.push_str(text);
+    if lock.chars().count() > MAX_OUTPUT_CHARS {
+        *lock = truncate(&lock, MAX_OUTPUT_CHARS);
+    }
+}
+
+/// 增量 UTF-8 解码器。
+///
+/// 命令输出按 1024 字节分块读取，多字节字符（中文、emoji）可能正好被切在
+/// 两块之间，直接对每块做 `from_utf8_lossy` 会得到 `�`。
+/// 这里把没凑齐的尾巴留到下一块再解，只有真正非法的字节才替换成 `�`。
+#[derive(Default)]
+struct Utf8Decoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8Decoder {
+    /// 送入一块字节，返回其中已经完整、可以显示的部分。
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        self.decode(false)
+    }
+
+    /// 输入结束：把剩余字节按尽力而为的方式解码。
+    fn finish(&mut self) -> String {
+        self.decode(true)
+    }
+
+    fn decode(&mut self, finished: bool) -> String {
+        let mut text = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    self.pending.clear();
+                    return text;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    if let Ok(prefix) = std::str::from_utf8(&self.pending[..valid]) {
+                        text.push_str(prefix);
+                    }
+                    match e.error_len() {
+                        // 明确的非法字节：替换后继续
+                        Some(len) => {
+                            text.push('�');
+                            self.pending.drain(..valid + len);
+                        }
+                        // 只是数据不够：留着等下一块（输入结束时按坏字节处理）
+                        None if !finished => {
+                            self.pending.drain(..valid);
+                            return text;
+                        }
+                        None => {
+                            text.push('�');
+                            self.pending.clear();
+                            return text;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 命令的结束方式。
 enum Outcome {
     Done(std::io::Result<std::process::ExitStatus>),
@@ -108,19 +179,19 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
     // 异步捕获输出（stdout + stderr 合并），只保留最新部分
     let output = Arc::new(Mutex::new(String::new()));
     let output_writer = output.clone();
-    tokio::spawn(async move {
+    let reader = tokio::spawn(async move {
         let mut reader = stdout.chain(stderr);
+        let mut decoder = Utf8Decoder::default();
         let mut buf = [0u8; 1024];
-        while let Ok(n) = reader.read(&mut buf).await {
-            if n == 0 {
-                break;
-            }
-            let mut lock = output_writer.lock().await;
-            lock.push_str(&String::from_utf8_lossy(&buf[..n]));
-            if lock.chars().count() > MAX_OUTPUT_CHARS {
-                *lock = truncate(&lock, MAX_OUTPUT_CHARS);
-            }
+        loop {
+            let n = match reader.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            push_output(&output_writer, &decoder.push(&buf[..n])).await;
         }
+        push_output(&output_writer, &decoder.finish()).await;
     });
 
     // 等待：正常结束 / 超时 / 取消
@@ -135,6 +206,9 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
 
     match outcome {
         Outcome::Done(wait) => {
+            // 进程退出时管道里可能还有没读完的输出（stderr 尤其明显），
+            // 等读取任务读到 EOF 再取结果；最多 2 秒，避免孙进程占着管道不放
+            let _ = timeout(Duration::from_secs(2), reader).await;
             let log = output.lock().await.clone();
             // code() 为 None 表示被信号终止，不能当成成功
             let code = match wait {
@@ -153,6 +227,7 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
                     child,
                     output: output.clone(),
                     pid,
+                    dir: task_dir.clone(),
                 },
             );
             let log = output.lock().await.clone();
@@ -163,5 +238,31 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
             notify(ctx, &msg).await;
             format!("{}\n当前输出:\n{}", msg, log)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf8_decoder_handles_split_multibyte() {
+        let text = "中文测试😀abc";
+        let mut decoder = Utf8Decoder::default();
+        let mut out = String::new();
+        // 每个字节单独送一次，模拟最坏情况的分块边界
+        for byte in text.as_bytes() {
+            out.push_str(&decoder.push(&[*byte]));
+        }
+        out.push_str(&decoder.finish());
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn utf8_decoder_replaces_invalid_bytes() {
+        let mut decoder = Utf8Decoder::default();
+        let mut out = decoder.push(&[0xff, b'a', 0xfe]);
+        out.push_str(&decoder.finish());
+        assert_eq!(out, "�a�");
     }
 }

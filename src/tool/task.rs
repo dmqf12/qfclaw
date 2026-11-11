@@ -17,6 +17,8 @@ pub struct TaskHandle {
     pub output: Arc<Mutex<String>>,
     /// 进程组 id，终止时连同子进程一起结束。
     pub pid: Option<u32>,
+    /// 任务目录（`qfclawtask/<id>`），任务结束后一并删除。
+    pub dir: std::path::PathBuf,
 }
 
 /// 全部后台任务。
@@ -70,7 +72,9 @@ impl Tool for TaskTool {
                         .status();
                 }
                 let _ = task.child.kill().await;
+                let dir = task.dir.clone();
                 tasks.remove(task_id);
+                let _ = std::fs::remove_dir_all(dir);
                 format!("🛑 终止任务：{task_id}")
             }
             "check" => {
@@ -78,7 +82,9 @@ impl Tool for TaskTool {
                 // 任务已退出：回传结束码并从表中移除，避免任务表无限增长
                 if let Ok(Some(status)) = task.child.try_wait() {
                     let code = status.code().unwrap_or(-1);
+                    let dir = task.dir.clone();
                     tasks.remove(task_id);
+                    let _ = std::fs::remove_dir_all(dir);
                     return format!(
                         "✅ 任务已结束 (Code {code}):\n{}",
                         truncate(&log, MAX_OUTPUT_CHARS)
