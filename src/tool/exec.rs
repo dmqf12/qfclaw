@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 
 use super::task::{TASKS, TaskHandle};
-use super::{MAX_OUTPUT_CHARS, NOTIFY_TTL_SECS, Tool, ToolContext, notify, truncate};
+use super::{MAX_OUTPUT_CHARS, Tool, ToolContext, notify, truncate};
 use crate::channel::{MsgKind, OutboundMessage};
 
 pub struct ExecTool;
@@ -135,7 +135,8 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
     };
     let abs_task_dir = task_dir.to_string_lossy().to_string();
 
-    // 执行提示（命令结束后删除；子代理上下文不发）
+    // 执行提示（子代理上下文不发）：命令结束后这条消息会被结果原地替换，
+    // 所以这里不设 TTL，由结果流程统一安排展示时长
     let start_msg = format!("⚡️执行：{}  ⌚️超时：{}", cmd_text, timeout_secs);
     if !ctx.silent
         && let Ok(id) = ctx
@@ -143,8 +144,7 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
             .send(
                 OutboundMessage::text(ctx.chat_id.clone(), &start_msg)
                     .kind(MsgKind::Text)
-                    .fold()
-                    .ttl(NOTIFY_TTL_SECS),
+                    .fold(),
             )
             .await
     {

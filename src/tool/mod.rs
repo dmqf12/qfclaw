@@ -46,8 +46,8 @@ pub struct ToolContext {
     images: Arc<Mutex<Vec<String>>>,
     /// 正在执行的工具数量（用于判断 /stop 是否有东西可停）。
     active: Arc<AtomicUsize>,
-    /// 最近一条工具提示消息的 ID：工具结果会以回复形式挂在它下面。
-    /// 每个工具用各自的 [`ToolContext::child`]，互不干扰。
+    /// 本次工具提示消息的 ID：工具结束时这条消息会被结果原地替换。
+    /// 每个工具走各自的 [`ToolContext::child`]，并发调用互不干扰。
     notice: Arc<Mutex<Option<MsgId>>>,
 }
 
@@ -113,12 +113,12 @@ impl ToolContext {
         self.active.fetch_sub(1, Ordering::SeqCst);
     }
 
-    /// 记住最近一条提示消息，工具结果会回复到它下面。
+    /// 记住本次工具的提示消息，结束时会被结果原地替换。
     async fn remember_notice(&self, id: MsgId) {
         *self.notice.lock().await = Some(id);
     }
 
-    /// 最近一条提示消息的 ID（还没有则为 `None`）。
+    /// 本次工具提示消息的 ID（还没有则为 `None`）。
     async fn last_notice(&self) -> Option<MsgId> {
         self.notice.lock().await.clone()
     }
@@ -229,13 +229,14 @@ pub async fn notify(ctx: &ToolContext, msg: &str) {
     if ctx.silent {
         return;
     }
+    // 不设 TTL：这条提示会在工具结束时被结果原地更新，
+    // 再由结果流程统一安排「展示 N 秒后删除」。
     if let Ok(id) = ctx
         .channel
         .send(
             OutboundMessage::text(ctx.chat_id.clone(), msg)
                 .kind(MsgKind::Text)
-                .fold()
-                .ttl(NOTIFY_TTL_SECS),
+                .fold(),
         )
         .await
     {
@@ -250,20 +251,39 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
     }
     let total = result.chars().count();
     let brief: String = result.chars().take(NOTIFY_RESULT_CHARS).collect();
-    let text = if total > NOTIFY_RESULT_CHARS {
-        format!("📤 {name} 结果（{total} 字符，已截断）:\n{brief}")
+    let header = if total > NOTIFY_RESULT_CHARS {
+        format!("📤 {name} 结果（{total} 字符，已截断）")
     } else {
-        format!("📤 {name} 结果:\n{brief}")
+        format!("📤 {name} 结果")
     };
-    let mut message = OutboundMessage::text(ctx.chat_id.clone(), &text)
-        .kind(MsgKind::Text)
-        .fold()
-        .ttl(NOTIFY_TTL_SECS);
-    // 挂在本次工具的提示消息下面，方便对照是哪次调用的结果
-    if let Some(notice) = ctx.last_notice().await {
-        message = message.reply_to(notice);
+
+    let text = format!("{header}:\n{brief}");
+
+    // 首选：用结果原地替换本次工具的提示消息
+    if let Some(id) = ctx.last_notice().await {
+        let message = OutboundMessage::text(ctx.chat_id.clone(), &text)
+            .kind(MsgKind::Text)
+            .fold();
+        if ctx.channel.edit(&message, &id).await.is_ok() {
+            // 结果展示 NOTIFY_TTL_SECS 秒后删除
+            let _ = ctx
+                .channel
+                .delete_later(&ctx.chat_id, &id, NOTIFY_TTL_SECS)
+                .await;
+            return;
+        }
     }
-    let _ = ctx.channel.send(message).await;
+
+    // 兜底：提示消息已被删除（工具执行超过提示存活时间）或平台不支持编辑
+    let _ = ctx
+        .channel
+        .send(
+            OutboundMessage::text(ctx.chat_id.clone(), &text)
+                .kind(MsgKind::Text)
+                .fold()
+                .ttl(NOTIFY_TTL_SECS),
+        )
+        .await;
 }
 
 /// 截断过长文本（保留最新部分）。

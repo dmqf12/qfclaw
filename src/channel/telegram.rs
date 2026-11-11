@@ -268,16 +268,6 @@ impl TelegramChannel {
         } else if msg.kind == MsgKind::Text {
             body["parse_mode"] = json!("Markdown");
         }
-        // 回复挂载：原消息可能已被删除（临时提示会过期），允许照常发送；
-        // ID 解析失败时退化成普通消息，不因一条提示影响结果回传
-        if let Some(reply_to) = &msg.reply_to
-            && let Ok(message_id) = reply_to.parse::<i64>()
-        {
-            body["reply_parameters"] = json!({
-                "message_id": message_id,
-                "allow_sending_without_reply": true,
-            });
-        }
         if with_buttons && !msg.buttons.is_empty() {
             body["reply_markup"] = json!({ "inline_keyboard": buttons_json(&msg.buttons) });
         }
@@ -408,6 +398,39 @@ impl Channel for TelegramChannel {
 
     async fn delete(&self, chat_id: &str, id: &str) -> Result<()> {
         self.delete_after(chat_id, id, 0);
+        Ok(())
+    }
+
+    /// 编辑已发送的文本消息：只改文字，不改消息类型（媒体需 editMessageCaption）。
+    async fn edit(&self, msg: &OutboundMessage, id: &MsgId) -> Result<()> {
+        let message_id = id
+            .parse::<i64>()
+            .map_err(|_| anyhow!("无效的消息 ID: {id}"))?;
+        let (chat_id, _) = split_chat(&msg.chat_id);
+        let mut body = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": msg.content,
+        });
+        if msg.fold {
+            body["text"] = json!(fold_markdown(&msg.content));
+            body["parse_mode"] = json!("MarkdownV2");
+        } else if msg.kind == MsgKind::Text {
+            body["parse_mode"] = json!("Markdown");
+        }
+        match self.api("editMessageText", &body).await {
+            Ok(_) => Ok(()),
+            // Markdown 解析失败的降级，与 send_text 保持一致
+            Err(e) if e.to_string().contains("parse") => {
+                body["parse_mode"] = json!("");
+                self.api("editMessageText", &body).await.map(|_| ())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn delete_later(&self, chat_id: &str, id: &MsgId, secs: u64) -> Result<()> {
+        self.delete_after(chat_id, id, secs);
         Ok(())
     }
 

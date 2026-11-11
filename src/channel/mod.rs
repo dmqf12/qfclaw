@@ -84,8 +84,6 @@ pub struct OutboundMessage {
     pub fold: bool,
     /// 存活秒数，到期后自动删除；`None` 表示保留。
     pub ttl: Option<u64>,
-    /// 要回复（挂载）的消息 ID；`None` 表示普通消息。
-    pub reply_to: Option<MsgId>,
 }
 
 impl OutboundMessage {
@@ -98,14 +96,7 @@ impl OutboundMessage {
             buttons: Vec::new(),
             fold: false,
             ttl: None,
-            reply_to: None,
         }
-    }
-
-    /// 以回复形式挂到某条消息下面。
-    pub fn reply_to(mut self, msg_id: impl Into<MsgId>) -> Self {
-        self.reply_to = Some(msg_id.into());
-        self
     }
 
     /// 设置消息用途。
@@ -165,6 +156,16 @@ pub trait Channel: Send + Sync + 'static {
 
     /// 删除消息。
     async fn delete(&self, chat_id: &str, id: &str) -> Result<()>;
+
+    /// 编辑已发送的文本消息（不支持时返回错误，调用方自行退化为新消息）。
+    async fn edit(&self, _msg: &OutboundMessage, _id: &MsgId) -> Result<()> {
+        bail!("当前平台不支持编辑消息")
+    }
+
+    /// 在指定秒数后删除消息（用于"结果展示 N 秒后消失"）。
+    async fn delete_later(&self, _chat_id: &str, _id: &MsgId, _secs: u64) -> Result<()> {
+        bail!("当前平台不支持延迟删除")
+    }
 
     /// 是否为白名单用户（支持配置多个）。
     fn is_allowed(&self, user_id: &str) -> bool;
