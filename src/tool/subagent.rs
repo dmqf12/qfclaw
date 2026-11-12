@@ -124,7 +124,11 @@ impl Tool for OpSubagentTool {
                 match subagent::remove(chat, &id) {
                     Ok(true) => format!(
                         "🧹 已删除子代理 {id} 的对话文件{}",
-                        if killed { "（并结束了运行）" } else { "" }
+                        if killed {
+                            "（并结束了运行）"
+                        } else {
+                            ""
+                        }
                     ),
                     Ok(false) => format!("⚠️ 子代理 {id} 没有对话文件"),
                     Err(e) => format!("❌ 删除失败: {e}"),
