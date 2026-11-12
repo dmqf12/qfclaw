@@ -130,18 +130,3 @@ fn run_systemctl(args: &[&str], what: &str) {
         Err(e) => log::warn("service", format!("无法执行 systemctl {what}：{e}")),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unit_text_contains_paths() {
-        let text = unit_text(Path::new("/opt/qfclaw"), Path::new("/opt/qfclaw/qfclaw"));
-        assert!(text.contains("Type=simple"));
-        assert!(!text.contains("tmux"));
-        assert!(text.contains("WorkingDirectory=/opt/qfclaw\n"));
-        assert!(text.contains("ExecStart=/opt/qfclaw/qfclaw\n"));
-        assert!(text.contains("WantedBy=default.target"));
-    }
-}

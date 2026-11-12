@@ -5,10 +5,6 @@ mod log;
 mod service;
 mod tool;
 
-/// 测试用：串行化会切换进程工作目录的用例，避免并行测试互相干扰。
-#[cfg(test)]
-pub static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

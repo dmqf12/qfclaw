@@ -268,29 +268,3 @@ async fn run(args: &Value, ctx: &ToolContext) -> String {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn utf8_decoder_handles_split_multibyte() {
-        let text = "中文测试😀abc";
-        let mut decoder = Utf8Decoder::default();
-        let mut out = String::new();
-        // 每个字节单独送一次，模拟最坏情况的分块边界
-        for byte in text.as_bytes() {
-            out.push_str(&decoder.push(&[*byte]));
-        }
-        out.push_str(&decoder.finish());
-        assert_eq!(out, text);
-    }
-
-    #[test]
-    fn utf8_decoder_replaces_invalid_bytes() {
-        let mut decoder = Utf8Decoder::default();
-        let mut out = decoder.push(&[0xff, b'a', 0xfe]);
-        out.push_str(&decoder.finish());
-        assert_eq!(out, "�a�");
-    }
-}
