@@ -23,7 +23,7 @@ use crate::log;
 /// Telegram 单条消息文本上限（UTF-16 码元）。
 const MAX_TEXT_UNITS: usize = 4000;
 /// 折叠模式会转义 MarkdownV2 特殊字符、行首加 `>`，内容膨胀，留更多余量。
-const MAX_FOLD_UNITS: usize = 3500;
+const MAX_FOLD_UNITS: usize = 3800;
 /// 模型用于显式切分超长回复的标记。
 const CUT_TAG: &str = "<cut/>";
 
