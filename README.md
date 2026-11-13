@@ -175,7 +175,7 @@ journalctl --user -u qfclaw -f    # 查看日志
 | `edit_file` | 精确替换文件中的一段文本，`old_string` 必须唯一 |
 | `send_file` | 发送图片（≤10MB）/ 其他文件（≤50MB） |
 | `subagent` | 把自包含的子任务交给子代理独立完成，返回结论 |
-| `op_subagent` | 管理子代理：`get_msg` 拉最新消息、`kill` 结束运行、`clear` 删除对话文件 |
+| `op_subagent` | 查看/管理子代理：`list` 列出全部、`status` 查看状态、`get_msg` 拉最新消息、`kill` 结束运行、`clear` 删除对话文件 |
 | `view_image` | 查看本地或网络图片，图片内容进入上下文 |
 
 工具的输出会被截断到最新 8000 字符，避免占用过多上下文。
@@ -200,7 +200,7 @@ journalctl --user -u qfclaw -f    # 查看日志
 - 子代理不向用户发消息，工具进度静默；`send_file` 不可用
 - 子代理内部不能再调用 `subagent`（禁止嵌套）
 - 同一 `id` 串行执行；`/stop` 或超时只会让它转入后台继续运行，不会中断任务
-- 转后台后可用 `op_subagent` 的 `get_msg` 取回结果、`kill` 结束运行、`clear` 删除对话文件
+- 转后台后可用 `op_subagent`：`list` 列出本会话全部子代理、`status` 看状态（运行中/空闲、消息数、记忆字数、用量、最后活动时间）、`get_msg` 取回结果、`kill` 结束运行、`clear` 删除对话文件
 
 ## 图片查看
 

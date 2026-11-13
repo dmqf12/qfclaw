@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use once_cell::sync::Lazy;
@@ -34,6 +34,13 @@ const DIR: &str = "../messages/subagent";
 
 /// `wait=true` 时前台最多等多久，超过就转后台继续跑。
 const WAIT_TIMEOUT_SECS: u64 = 60;
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 fn file_key(id: &str) -> String {
     id.replace(['/', '\\'], "_")
@@ -205,6 +212,95 @@ pub fn remove(chat: &str, id: &str) -> Result<bool> {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// 子代理状态：是否在运行、消息数、记忆字数、用量、最后活动时间。
+pub async fn status(chat: &str, id: &str) -> String {
+    let id = id.trim();
+    let running = RUNNING.lock().await.contains_key(&running_key(chat, id));
+    let file = path(chat, id);
+    let exists = fs::metadata(&file).is_ok();
+    if !exists && !running {
+        return format!("🤖 子代理 {id}：无记录（未运行，也没有对话文件）");
+    }
+    let doc = load_doc(chat, id);
+    let messages = doc["messages"].as_array().map_or(0, |list| list.len());
+    let memory = doc["memory"].as_str().unwrap_or_default().chars().count();
+    let usage = doc["usage"]["total_tokens"].as_u64().unwrap_or(0);
+    let last = match fs::metadata(&file).and_then(|m| m.modified()) {
+        Ok(time) => time
+            .duration_since(UNIX_EPOCH)
+            .map(|d| ago(now().saturating_sub(d.as_secs())))
+            .unwrap_or_else(|_| "未知".to_string()),
+        Err(_) => "无文件".to_string(),
+    };
+    format!(
+        "🤖 子代理 {id}\n状态：{}\n消息：{messages} 条\n记忆：{memory} 字\n用量：{usage} tokens\n最后活动：{last}",
+        if running {
+            "🟢 运行中"
+        } else {
+            "⚪ 空闲"
+        }
+    )
+}
+
+/// 列出本会话的全部子代理及其状态。
+pub async fn list(chat: &str) -> String {
+    let mut prefix = chat.replace(':', ".");
+    if !prefix.contains('.') {
+        prefix.push_str(".0");
+    }
+    let prefix = format!("{prefix}.");
+    let Ok(dir) = fs::read_dir(DIR) else {
+        return "📋 本会话还没有子代理".to_string();
+    };
+
+    let running: Vec<String> = RUNNING.lock().await.keys().cloned().collect();
+    let mut rows: Vec<(String, bool, usize, u64, String)> = Vec::new();
+    for entry in dir.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(id) = name
+            .strip_prefix(&prefix)
+            .and_then(|n| n.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let id = id.to_string();
+        let is_running = running.contains(&running_key(chat, &id));
+        let doc = load_doc(chat, &id);
+        let messages = doc["messages"].as_array().map_or(0, |l| l.len());
+        let usage = doc["usage"]["total_tokens"].as_u64().unwrap_or(0);
+        let last = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| ago(now().saturating_sub(d.as_secs())))
+            .unwrap_or_else(|| "未知".to_string());
+        rows.push((id, is_running, messages, usage, last));
+    }
+    if rows.is_empty() {
+        return "📋 本会话还没有子代理".to_string();
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = format!("📋 本会话子代理（{} 个）", rows.len());
+    for (id, running, messages, usage, last) in rows {
+        out.push_str(&format!(
+            "\n\n{}{id}\n  消息 {messages} 条 · 用量 {usage} tokens · 最后活动 {last}",
+            if running { "🟢 " } else { "⚪ " }
+        ));
+    }
+    out
+}
+
+/// 把「距今秒数」格式化成可读文本。
+fn ago(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs} 秒前"),
+        60..=3599 => format!("{} 分钟前", secs / 60),
+        3600..=86399 => format!("{} 小时前", secs / 3600),
+        _ => format!("{} 天前", secs / 86400),
     }
 }
 

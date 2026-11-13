@@ -87,21 +87,21 @@ impl Tool for OpSubagentTool {
             "type": "function",
             "function": {
                 "name": "op_subagent",
-                "description": "管理子代理的运行状态与文件，不用于和子代理对话。get_msg 拉取最新消息；kill 结束正在运行的任务（对话上下文保留，之后仍可用相同 id 继续）；clear 删除对话文件（先结束运行）。只是想追加消息或让子代理继续时，不要用本工具，直接调用 subagent 并复用相同 id。",
+                "description": "查看与管理子代理，不用于和子代理对话。list 列出本会话全部子代理及运行状态；status 查看某个子代理的详细状态（是否运行中、消息数、记忆字数、用量、最后活动时间）；get_msg 拉取最新一条消息；kill 结束正在运行的任务（对话上下文保留，之后仍可用相同 id 继续）；clear 删除对话文件（先结束运行）。只是想追加消息或让子代理继续时，不要用本工具，直接调用 subagent 并复用相同 id。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "id": {
                             "type": "string",
-                            "description": "子代理 id"
+                            "description": "子代理 id；list 之外的操作必填"
                         },
                         "action": {
                             "type": "string",
-                            "enum": ["get_msg", "kill", "clear"],
-                            "description": "操作类型：get_msg 拉取最新消息；kill 结束运行（保留对话文件）；clear 删除对话文件"
+                            "enum": ["list", "status", "get_msg", "kill", "clear"],
+                            "description": "操作类型：list 列出全部子代理；status 查看单个子代理状态；get_msg 拉取最新消息；kill 结束运行（保留对话文件）；clear 删除对话文件"
                         }
                     },
-                    "required": ["id", "action"]
+                    "required": ["action"]
                 }
             }
         })
@@ -109,13 +109,21 @@ impl Tool for OpSubagentTool {
 
     async fn call(&self, args: Value, ctx: &ToolContext) -> String {
         let id = args["id"].as_str().unwrap_or_default().trim().to_string();
-        let action = args["action"].as_str().unwrap_or("get_msg");
+        let action = args["action"].as_str().unwrap_or("status");
+        let chat = ctx.chat_id.as_str();
+
+        // list 面向整个会话，不需要 id
+        if action == "list" {
+            notify(ctx, "📋 列出子代理").await;
+            return subagent::list(chat).await;
+        }
+
         if id.is_empty() {
             return "❌ id 不能为空".to_string();
         }
-        let chat = ctx.chat_id.as_str();
 
         match action {
+            "status" => subagent::status(chat, &id).await,
             "kill" => {
                 notify(ctx, &format!("🛑 结束子代理 {id}")).await;
                 if subagent::kill(chat, &id).await {
