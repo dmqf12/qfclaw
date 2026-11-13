@@ -21,7 +21,7 @@ use super::{
 use crate::log;
 
 /// 单条消息的分段阈值（UTF-16 码元），折叠与普通消息统一按此拆分。
-const MAX_MESSAGE_UNITS: usize = 3800;
+const MAX_MESSAGE_UNITS: usize = 4000;
 /// 模型用于显式切分超长回复的标记。
 const CUT_TAG: &str = "<cut/>";
 
@@ -33,6 +33,45 @@ fn text_units(text: &str) -> usize {
 /// 按 `<cut/>` 与单条上限切分消息。
 ///
 /// 优先使用模型给出的分段点；单段仍超限时按行、再按字符硬切。
+/// 把文本渲染成若干条折叠消息：**先按 MarkdownV2 转义，再按码元切分**。
+///
+/// 折叠正文会膨胀（特殊字符前面加 `\`、每行行首加 `>`），
+/// 所以必须用转义后的长度判断是否超限，否则实际发出的消息会超过 Telegram 上限。
+fn fold_markdown_parts(text: &str, max: usize) -> Vec<String> {
+    let collapsed = BLANK_LINES.replace_all(text, "\n");
+    let escaped = escape_markdown_v2(&collapsed).replace('\n', "\n>");
+    let shell = text_units("**>") + text_units("||");
+    let mut blocks = Vec::new();
+    let mut buf = String::new();
+    let mut units = 0usize;
+    let mut chars = escaped.chars().peekable();
+    while let Some(c) = chars.next() {
+        let mut piece = String::new();
+        piece.push(c);
+        let mut width = c.len_utf16();
+        // 不要把 `\X` 拆到两段里，否则解析会错位
+        if c == '\\'
+            && let Some(next) = chars.next()
+        {
+            piece.push(next);
+            width += next.len_utf16();
+        }
+        if units + width + shell > max && !buf.is_empty() {
+            blocks.push(std::mem::take(&mut buf));
+            units = 0;
+        }
+        buf.push_str(&piece);
+        units += width;
+    }
+    if !buf.is_empty() {
+        blocks.push(buf);
+    }
+    blocks
+        .into_iter()
+        .map(|block| format!("**>{block}||"))
+        .collect()
+}
+
 fn split_message(text: &str, max: usize) -> Vec<String> {
     let mut parts = Vec::new();
     for part in text.split(CUT_TAG) {
@@ -318,7 +357,8 @@ impl TelegramChannel {
             body["message_thread_id"] = json!(t);
         }
         if msg.fold {
-            body["text"] = json!(fold_markdown(text));
+            // 调用方（`send`）已按 `fold_markdown_parts` 渲染好，这里不再转义
+            body["text"] = json!(text);
             body["parse_mode"] = json!("MarkdownV2");
         } else if msg.kind == MsgKind::Text {
             body["parse_mode"] = json!("Markdown");
@@ -456,8 +496,13 @@ impl Channel for TelegramChannel {
             return self.send_file(&msg.chat_id, &msg.content).await;
         }
 
-        // 超长回复按 `<cut/>` 分段后逐条发送，按钮只挂在最后一条
-        let mut parts = split_message(&msg.content, MAX_MESSAGE_UNITS);
+        // 超长回复逐条发送，按钮只挂在最后一条。
+        // 折叠消息先转义再切分，普通消息按 `<cut/>` 与行边界切分。
+        let mut parts = if msg.fold {
+            fold_markdown_parts(&msg.content, MAX_MESSAGE_UNITS)
+        } else {
+            split_message(&msg.content, MAX_MESSAGE_UNITS)
+        };
         let last = parts.pop().ok_or_else(|| anyhow!("不能发送空消息"))?;
         let mut brief = format!(
             "{} ↑ {}字",
