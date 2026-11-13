@@ -43,12 +43,6 @@ fn notify_ttl(name: &str) -> u64 {
 /// 回显给用户的工具结果最大字符数（给模型的完整结果不受此限制）。
 const NOTIFY_RESULT_CHARS: usize = 2_000;
 
-/// 「提示 + 结果」合并后的字符上限。
-///
-/// 折叠消息要按 MarkdownV2 转义（内容会膨胀），而 Telegram 单条上限是
-/// 4096 个 UTF-16 码元，这里留出余量，避免编辑/发送失败。
-const NOTIFY_MERGED_CHARS: usize = 3_000;
-
 /// 工具执行上下文。
 pub struct ToolContext {
     pub channel: Arc<dyn Channel>,
@@ -275,47 +269,28 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
     } else {
         format!("📤 {name} 结果")
     };
-
     let text = format!("{header}:\n{brief}");
 
-    // 首选：把结果追加到本次工具的提示消息里（调用内容与结果同一条消息）
-    if let Some((id, original)) = ctx.last_notice().await {
-        // 提示本身可能不短（例如写入内容的预览），合并后仍要留足余量
-        let used = original.chars().count() + header.chars().count() + 4;
-        let room = NOTIFY_MERGED_CHARS.saturating_sub(used);
-        let merged = format!("{original}\n\n{header}:\n{}", head(&brief, room));
-        let message = OutboundMessage::text(ctx.chat_id.clone(), &merged)
+    // 把本次工具的提示消息原地更新成结果（不保留提示原文）
+    if let Some((id, _)) = ctx.last_notice().await {
+        let message = OutboundMessage::text(ctx.chat_id.clone(), &text)
             .kind(MsgKind::Text)
             .fold();
         if ctx.channel.edit(&message, &id).await.is_ok() {
-            // 结果展示 notify_ttl(name) 秒后删除
             let _ = ctx
                 .channel
                 .delete_later(&ctx.chat_id, &id, notify_ttl(name))
                 .await;
             return;
         }
-
-        // 提示原文太长（转义后超出单条上限）时只写结果，保证能更新掉这条提示
-        let only = OutboundMessage::text(ctx.chat_id.clone(), &text)
-            .kind(MsgKind::Text)
-            .fold();
-        if ctx.channel.edit(&only, &id).await.is_ok() {
-            let _ = ctx
-                .channel
-                .delete_later(&ctx.chat_id, &id, notify_ttl(name))
-                .await;
-            return;
-        }
-
-        // 连结果都写不进去：把旧提示一起清掉，避免残留
+        // 更新失败（结果太长或平台不支持）：把旧提示一并清掉，避免残留
         let _ = ctx
             .channel
             .delete_later(&ctx.chat_id, &id, notify_ttl(name))
             .await;
     }
 
-    // 兜底：提示消息已被删除（工具执行超过提示存活时间）或平台不支持编辑
+    // 兜底：提示消息已被删除或无法编辑，另发一条带 TTL 的结果消息
     let _ = ctx
         .channel
         .send(
@@ -325,15 +300,6 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
                 .ttl(notify_ttl(name)),
         )
         .await;
-}
-
-/// 取文本开头 `max` 个字符，超出部分用省略号代替。
-fn head(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max).collect();
-    format!("{head}…")
 }
 
 /// 截断过长文本（保留最新部分）。
