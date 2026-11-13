@@ -185,7 +185,7 @@ journalctl --user -u qfclaw -f    # 查看日志
 模型可以调用 `subagent` 工具把任务交给独立上下文的子代理：
 
 ```json
-{ "id": "research", "content": "调研 ...", "get_msg": false, "timeout": 60 }
+{ "id": "research", "content": "调研 ...", "get_msg": false, "wait": true }
 ```
 
 | 参数 | 说明 |
@@ -193,7 +193,7 @@ journalctl --user -u qfclaw -f    # 查看日志
 | `id` | 子代理标识，相同 id 复用同一份上下文 |
 | `content` | 要发送的消息，**必须自包含**（子代理看不到主对话） |
 | `get_msg` | `true` 时只返回该子代理最新的一条消息，忽略 `content` |
-| `timeout` | 前台等待秒数，默认 60；到点后子代理转后台继续运行，不中断 |
+| `wait` | 是否在前台等结果，默认 `true`；为 `false` 时立即转后台（不中断任务），前台最多等 60s，超时同样转后台 |
 
 - 上下文存 `messages/subagent/<uid>.<topicid>.<子代理id>.json`（私聊 topicid 记为 `0`），结构同会话文件
 - 子代理按会话隔离：不同聊天/话题下的同名 id 互不影响

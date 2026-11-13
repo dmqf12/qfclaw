@@ -35,9 +35,9 @@ impl Tool for SubagentTool {
                             "type": "boolean",
                             "description": "只读取该子代理最新一条消息，忽略 content；不会让它继续工作。要继续工作请正常调用并传 content"
                         },
-                        "timeout": {
-                            "type": "integer",
-                            "description": "前台等待秒数，默认 60。超时或用户 /stop 都不会中断子代理，它会转后台继续运行，之后用 get_msg 取回结果"
+                        "wait": {
+                            "type": "boolean",
+                            "description": "是否在前台等待子代理返回结果，默认 true。为 false 时立即转到后台运行、马上返回，之后用 op_subagent 的 get_msg 取回结果"
                         }
                     },
                     "required": ["id"]
@@ -50,19 +50,26 @@ impl Tool for SubagentTool {
         let id = args["id"].as_str().unwrap_or_default();
         let content = args["content"].as_str().unwrap_or_default();
         let get_msg = args["get_msg"].as_bool().unwrap_or(false);
-        let timeout = args["timeout"].as_u64().unwrap_or(60);
+        let wait = args["wait"].as_bool().unwrap_or(true);
 
         if get_msg {
             notify(ctx, &format!("🤖 取回子代理 {id} 的最新消息")).await;
         } else {
             notify(
                 ctx,
-                &format!("🤖 子代理 {id}  ⌚️超时：{timeout}s\n{content}"),
+                &format!(
+                    "🤖 子代理 {id}  {}\n{content}",
+                    if wait {
+                        "⌚️等待结果"
+                    } else {
+                        "🔀后台运行"
+                    }
+                ),
             )
             .await;
         }
 
-        subagent::run(ctx, id, content, get_msg, timeout).await
+        subagent::run(ctx, id, content, get_msg, wait).await
     }
 }
 

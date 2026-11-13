@@ -32,6 +32,9 @@ use crate::tool::{ToolContext, registry};
 
 const DIR: &str = "../messages/subagent";
 
+/// `wait=true` 时前台最多等多久，超过就转后台继续跑。
+const WAIT_TIMEOUT_SECS: u64 = 60;
+
 fn file_key(id: &str) -> String {
     id.replace(['/', '\\'], "_")
 }
@@ -238,13 +241,7 @@ fn system_prompt(chat: &str, id: &str) -> String {
 ///
 /// - `get_msg` 为 true：只返回该子代理最新一条消息，忽略 `content`
 /// - 否则：把 `content` 作为用户消息追加，跑完整对话循环后返回本轮结论
-pub async fn run(
-    ctx: &ToolContext,
-    id: &str,
-    content: &str,
-    get_msg: bool,
-    timeout_secs: u64,
-) -> String {
+pub async fn run(ctx: &ToolContext, id: &str, content: &str, get_msg: bool, wait: bool) -> String {
     let id = id.trim();
     if id.is_empty() {
         return "❌ id 不能为空".to_string();
@@ -265,22 +262,27 @@ pub async fn run(
         return "❌ content 不能为空".to_string();
     }
 
-    let secs = timeout_secs.max(1);
     let token = ctx.cancel_token().await;
 
-    // 等锁也要受超时/取消约束：同一 id 可能正在后台跑，不能无限等
+    // 等锁：同一 id 可能正在后台跑。等结果时最多等 WAIT_TIMEOUT_SECS；
+    // 不等结果时拿不到锁就直接返回，不排队。
     let lock = lock_for(chat, id).await;
-    let guard = tokio::select! {
-        guard = lock.lock_owned() => guard,
-        _ = tokio::time::sleep(Duration::from_secs(secs)) => {
-            return format!(
-                "⏱ 子代理 {id} 正在后台运行，等待超过 {secs}s，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
-            );
+    let guard = if wait {
+        tokio::select! {
+            guard = lock.lock_owned() => guard,
+            _ = tokio::time::sleep(Duration::from_secs(WAIT_TIMEOUT_SECS)) => {
+                return not_waiting(id, wait);
+            }
+            _ = token.cancelled() => {
+                return format!(
+                    "🛑 已停止等待子代理 {id}，它仍在运行，稍后用 op_subagent 的 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+                );
+            }
         }
-        _ = token.cancelled() => {
-            return format!(
-                "🛑 已停止等待子代理 {id}，它仍在后台运行，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
-            );
+    } else {
+        match lock.try_lock_owned() {
+            Ok(guard) => guard,
+            Err(_) => return not_waiting(id, wait),
         }
     };
 
@@ -329,10 +331,22 @@ pub async fn run(
         },
     );
 
+    // 不等结果：任务已在后台跑起来，立刻返回
+    if !wait {
+        drop(handle);
+        log::info(
+            "subagent",
+            format!("{} 子代理 {id} 转后台运行（未等待结果）", log::chat(chat)),
+        );
+        return format!(
+            "🔀 子代理 {id} 已在后台运行，稍后用 op_subagent 的 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+        );
+    }
+
     let mut cancelled = false;
     let joined = tokio::select! {
         joined = &mut handle => Some(joined),
-        _ = tokio::time::sleep(Duration::from_secs(secs)) => None,
+        _ = tokio::time::sleep(Duration::from_secs(WAIT_TIMEOUT_SECS)) => None,
         _ = token.cancelled() => {
             cancelled = true;
             None
@@ -363,17 +377,30 @@ pub async fn run(
             if cancelled {
                 "被 /stop 中止前台等待".to_string()
             } else {
-                format!("前台等待超过 {secs}s")
+                format!("前台等待超过 {WAIT_TIMEOUT_SECS}s")
             }
         ),
     );
     if cancelled {
         format!(
-            "🛑 子代理 {id} 已转后台继续运行，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+            "🛑 子代理 {id} 已转后台继续运行，稍后用 op_subagent 的 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
         )
     } else {
         format!(
-            "⏱ 子代理 {id} 前台等待超过 {secs}s，已转后台继续运行，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+            "⏱ 子代理 {id} 前台等待超过 {WAIT_TIMEOUT_SECS}s，已转后台继续运行，稍后用 op_subagent 的 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+        )
+    }
+}
+
+/// 「没等到结果」的统一提示：区分没等（后台跑）与等超时。
+fn not_waiting(id: &str, wait: bool) -> String {
+    if wait {
+        format!(
+            "⏱ 子代理 {id} 正在运行，等待超过 {WAIT_TIMEOUT_SECS}s，稍后用 op_subagent 的 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+        )
+    } else {
+        format!(
+            "🔀 子代理 {id} 正在运行，本次未等待结果，稍后用 op_subagent 的 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
         )
     }
 }
