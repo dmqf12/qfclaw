@@ -20,10 +20,8 @@ use super::{
 };
 use crate::log;
 
-/// Telegram 单条消息文本上限（UTF-16 码元）。
-const MAX_TEXT_UNITS: usize = 4000;
-/// 折叠模式会转义 MarkdownV2 特殊字符、行首加 `>`，内容膨胀，留更多余量。
-const MAX_FOLD_UNITS: usize = 3800;
+/// 单条消息的分段阈值（UTF-16 码元），折叠与普通消息统一按此拆分。
+const MAX_MESSAGE_UNITS: usize = 3800;
 /// 模型用于显式切分超长回复的标记。
 const CUT_TAG: &str = "<cut/>";
 
@@ -459,12 +457,7 @@ impl Channel for TelegramChannel {
         }
 
         // 超长回复按 `<cut/>` 分段后逐条发送，按钮只挂在最后一条
-        let max = if msg.fold {
-            MAX_FOLD_UNITS
-        } else {
-            MAX_TEXT_UNITS
-        };
-        let mut parts = split_message(&msg.content, max);
+        let mut parts = split_message(&msg.content, MAX_MESSAGE_UNITS);
         let last = parts.pop().ok_or_else(|| anyhow!("不能发送空消息"))?;
         let mut brief = format!(
             "{} ↑ {}字",
