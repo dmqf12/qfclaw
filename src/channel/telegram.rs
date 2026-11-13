@@ -131,7 +131,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("clear", "🧹删除当前对话"),
     ("status", "📊查看当前状态"),
     ("compact", "🗜压缩上下文"),
-    ("stop", "⏹️停止当前任务"),
+    ("stop", "🛑停止当前任务"),
     ("context", "📏设置上下文窗口"),
     ("reasoning", "🧠选择推理模式"),
     ("restart", "🔄重新启动网关"),
