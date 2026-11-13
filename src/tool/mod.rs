@@ -295,6 +295,24 @@ pub async fn notify_result(ctx: &ToolContext, name: &str, result: &str) {
                 .await;
             return;
         }
+
+        // 提示原文太长（转义后超出单条上限）时只写结果，保证能更新掉这条提示
+        let only = OutboundMessage::text(ctx.chat_id.clone(), &text)
+            .kind(MsgKind::Text)
+            .fold();
+        if ctx.channel.edit(&only, &id).await.is_ok() {
+            let _ = ctx
+                .channel
+                .delete_later(&ctx.chat_id, &id, notify_ttl(name))
+                .await;
+            return;
+        }
+
+        // 连结果都写不进去：把旧提示一起清掉，避免残留
+        let _ = ctx
+            .channel
+            .delete_later(&ctx.chat_id, &id, notify_ttl(name))
+            .await;
     }
 
     // 兜底：提示消息已被删除（工具执行超过提示存活时间）或平台不支持编辑
