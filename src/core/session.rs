@@ -6,6 +6,8 @@
 //! - 元信息：`messages/meta/<chat>.info.json`，结构
 //!   `{ "create_time": 1730000000, "title": "话题标题", "usage": {} }`
 //!
+//! 压缩前的完整上下文归档到 `messages/archive/<chat>/<时间戳>.json`。
+//!
 //! `<chat>` 为会话键（`chat_id` 或 `chat_id:thread_id`）。
 //! 压缩记忆与消息一起存放在对话文件里（两者总是一起写）；
 //! 标题 / usage 这类只关心元数据的操作只碰很小的 meta 文件，
@@ -224,10 +226,36 @@ pub fn memory(chat: &str) -> String {
 /// 留着会让下一轮再次判定「需要压缩」，从而反复压缩。
 pub fn apply_compact(chat: &str, memory: &str, messages: &[Value]) -> Result<()> {
     let mut doc = read_chat_doc(chat);
+    // 压缩会替换消息列表，先把完整上下文归档，方便回溯
+    if let Err(e) = archive(chat, &doc, memory) {
+        log::warn("session", format!("归档压缩前上下文失败 {chat}：{e}"));
+    }
     doc["memory"] = json!(memory);
     doc["messages"] = json!(messages);
     write_json(&messages_path(chat), &doc)?;
     update_info(chat, |info| info["usage"] = Value::Null)
+}
+
+/// 压缩前归档完整上下文：`messages/archive/<chat>/<时间戳>.json`。
+///
+/// 归档内容含压缩前的历史记忆、全部消息、当次摘要与 usage，
+/// 压缩本身仍然照旧把消息列表替换成「最后一条用户消息」。
+fn archive(chat: &str, doc: &Value, summary: &str) -> Result<String> {
+    let dir = format!("{MSG_DIR}/archive/{}", file_key(chat));
+    fs::create_dir_all(&dir)?;
+    let at = now();
+    let path = format!("{dir}/{at}.json");
+    let meta = info(chat);
+    let snapshot = json!({
+        "archived_at": at,
+        "title": meta["title"].clone(),
+        "usage": meta["usage"].clone(),
+        "memory": doc["memory"].clone(),
+        "summary": summary,
+        "messages": doc["messages"].clone(),
+    });
+    write_json(&path, &snapshot)?;
+    Ok(path)
 }
 
 /// 对话概览：`(标题, 最近一次请求的总 token)`。

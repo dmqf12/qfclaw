@@ -156,6 +156,7 @@ journalctl --user -u qfclaw -f    # 查看日志
 
 - `messages` 不保存 system prompt，每次请求时重新拼接
 - `/clear` 会把当前会话文件移到 `messages/clear/`（同名时追加时间戳），话题模式下还会删除该话题；之后的对话从空白开始
+- 上下文压缩（自动或 `/compact`）会把压缩前的完整上下文归档到 `messages/archive/<会话键>/<时间戳>.json`，含压缩前的 `memory`、全部 `messages`、当次 `summary` 与 `usage`；压缩后会话文件本身仍只保留「历史记忆 + 最后一条用户消息」
 - 写入为「临时文件 + rename」原子操作
 - 每个会话独立运行一个对话任务：A 话题生成中收到 B 话题的消息互不阻塞
 - 同一会话运行中收到新消息，会打断当前回复并把新消息合并进去重新请求
