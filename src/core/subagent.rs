@@ -273,10 +273,14 @@ pub async fn run(
     let guard = tokio::select! {
         guard = lock.lock_owned() => guard,
         _ = tokio::time::sleep(Duration::from_secs(secs)) => {
-            return format!("⏱ 子代理 {id} 正在后台运行，等待超过 {secs}s，稍后用 get_msg 取回结果");
+            return format!(
+                "⏱ 子代理 {id} 正在后台运行，等待超过 {secs}s，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+            );
         }
         _ = token.cancelled() => {
-            return format!("🛑 已停止等待子代理 {id}，它仍在后台运行，稍后用 get_msg 取回结果");
+            return format!(
+                "🛑 已停止等待子代理 {id}，它仍在后台运行，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+            );
         }
     };
 
@@ -364,8 +368,12 @@ pub async fn run(
         ),
     );
     if cancelled {
-        format!("🛑 子代理 {id} 已转后台继续运行，稍后用 get_msg 取回结果")
+        format!(
+            "🛑 子代理 {id} 已转后台继续运行，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+        )
     } else {
-        format!("⏱ 子代理 {id} 前台等待超过 {secs}s，已转后台继续运行，稍后用 get_msg 取回结果")
+        format!(
+            "⏱ 子代理 {id} 前台等待超过 {secs}s，已转后台继续运行，稍后用 get_msg 取回结果；要继续该子代理，直接再用相同 id 调用 subagent"
+        )
     }
 }

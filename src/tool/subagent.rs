@@ -19,7 +19,7 @@ impl Tool for SubagentTool {
             "type": "function",
             "function": {
                 "name": "subagent",
-                "description": "把一个自包含的子任务交给子代理独立完成，返回其结论。适合调研、批量处理、长链路操作；不要用它做需要和用户确认的事。相同 id 复用同一份上下文。",
+                "description": "把子任务交给子代理并取回结论。同一个 id 可以反复调用：每次调用都是给这个子代理追加一条消息，它会带着已有上下文继续，相当于持续对话。要继续、追问、补充信息、让它做下一步，直接再用相同 id 调用即可，不要 kill 也不要换新 id。适合调研、批量处理、长链路操作；不要用它做需要和用户确认的事。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -29,11 +29,11 @@ impl Tool for SubagentTool {
                         },
                         "id": {
                             "type": "string",
-                            "description": "子代理 id，相同 id 会复用同一份上下文"
+                            "description": "子代理 id。相同 id 复用同一份上下文，重复调用即为追加消息"
                         },
                         "get_msg": {
                             "type": "boolean",
-                            "description": "为 true 时只返回该子代理最新的一条消息，忽略 content"
+                            "description": "只读取该子代理最新一条消息，忽略 content；不会让它继续工作。要继续工作请正常调用并传 content"
                         },
                         "timeout": {
                             "type": "integer",
@@ -80,7 +80,7 @@ impl Tool for OpSubagentTool {
             "type": "function",
             "function": {
                 "name": "op_subagent",
-                "description": "管理子代理：kill 结束正在运行的子代理；clear 删除该子代理的对话文件（先结束运行）；get_msg 拉取该子代理最新一条消息。",
+                "description": "管理子代理的运行状态与文件，不用于和子代理对话。get_msg 拉取最新消息；kill 结束正在运行的任务（对话上下文保留，之后仍可用相同 id 继续）；clear 删除对话文件（先结束运行）。只是想追加消息或让子代理继续时，不要用本工具，直接调用 subagent 并复用相同 id。",
                 "parameters": {
                     "type": "object",
                     "properties": {
