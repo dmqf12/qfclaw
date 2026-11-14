@@ -4,6 +4,7 @@ mod core;
 mod log;
 mod service;
 mod tool;
+mod util;
 
 use std::collections::HashMap;
 use std::sync::Arc;

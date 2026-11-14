@@ -169,7 +169,7 @@ pub struct TelegramChannel {
 
 impl TelegramChannel {
     pub fn new() -> Result<Self> {
-        let json: Value = qffunc::read_json("../config/bot.json", "telegram")?;
+        let json: Value = crate::util::read_json_section("../config/bot.json", "telegram")?;
         let token = json["token"].as_str().unwrap_or_default();
         if token.is_empty() {
             bail!("未找到token")

@@ -64,7 +64,7 @@ fn empty_doc() -> Value {
 /// 读取子代理文件；缺失返回空结构，损坏则备份后返回空结构。
 fn load_doc(chat: &str, id: &str) -> Value {
     let file = path(chat, id);
-    let mut doc = match qffunc::file_to_json(&file) {
+    let mut doc = match crate::util::read_json_file(&file) {
         Ok(doc) if doc.is_object() => doc,
         _ => {
             // 文件存在却解析失败：先备份，避免被覆盖

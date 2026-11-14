@@ -71,7 +71,7 @@ fn write_json(path: &str, doc: &Value) -> Result<()> {
 
 /// 读取 JSON 对象；缺失时返回 `None`，损坏时先备份再返回 `None`。
 fn read_json(path: &str) -> Option<Value> {
-    match qffunc::file_to_json(path) {
+    match crate::util::read_json_file(path) {
         Ok(value) if value.is_object() => Some(value),
         _ => {
             if fs::metadata(path).is_ok() {

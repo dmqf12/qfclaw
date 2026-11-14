@@ -19,7 +19,7 @@ pub struct ModelConfig {
 
 impl ModelConfig {
     pub fn load() -> Result<Self> {
-        let json = qffunc::file_to_json("../config/models.json")
+        let json = crate::util::read_json_file("../config/models.json")
             .map_err(|e| anyhow!("models.json 解析失败: {e}"))?;
 
         let use_model = json["use_model"].as_str().unwrap_or_default();
